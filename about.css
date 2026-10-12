@@ -1,0 +1,260 @@
+.about-shell {
+  max-width: 960px;
+}
+
+.about-header {
+  gap: 24px;
+}
+
+.about-brand .brand-name {
+  font-size: 18px;
+  font-weight: 600;
+  line-height: 1.5;
+  letter-spacing: .3px;
+}
+
+.about-return {
+  flex: none;
+  color: var(--green);
+  font-size: 12px;
+  text-decoration: none;
+}
+
+.about-return span {
+  margin-left: 5px;
+}
+
+.about-return:hover,
+.about-footer a:hover {
+  text-decoration: underline;
+  text-underline-offset: 4px;
+}
+
+.about-intro {
+  padding: 48px 0 42px;
+  max-width: 760px;
+}
+
+.about-free {
+  display: inline-block;
+  padding: 5px 9px;
+  border-radius: 5px;
+  color: var(--green);
+  background: var(--green-light);
+  font-size: 11px;
+  letter-spacing: .4px;
+}
+
+.about-intro h1 {
+  margin: 16px 0;
+  font-size: clamp(26px, 3.5vw, 34px);
+  line-height: 1.5;
+  letter-spacing: .2px;
+}
+
+.about-intro p {
+  margin: 0;
+  color: #64705f;
+  font-size: 14px;
+  line-height: 2;
+}
+
+.about-intro .about-subtitle {
+  margin: -4px 0 15px;
+  color: var(--green);
+  font-size: 17px;
+  font-weight: 500;
+}
+
+.about-start {
+  margin-top: 23px;
+}
+
+.about-section {
+  margin-bottom: 30px;
+}
+
+.about-section h2 {
+  margin: 0 0 17px;
+  font-size: 20px;
+  font-weight: 600;
+}
+
+.about-mode-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 18px;
+}
+
+.about-card {
+  padding: 26px;
+  background: var(--paper);
+  border: 1px solid #e1e4d9;
+  border-radius: 13px;
+}
+
+.about-card h3 {
+  margin: 0 0 10px;
+  color: var(--green);
+  font-size: 16px;
+  font-weight: 600;
+}
+
+.about-card p {
+  margin: 0;
+  color: #64705f;
+  font-size: 13px;
+  line-height: 1.95;
+}
+
+.about-card p + p {
+  margin-top: 12px;
+}
+
+.about-steps-card {
+  margin-top: 8px;
+}
+
+.about-steps {
+  margin: 0;
+  padding-left: 24px;
+}
+
+.about-steps li {
+  padding-left: 6px;
+}
+
+.about-steps li::marker {
+  color: var(--green);
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+}
+
+.about-steps li + li {
+  margin-top: 20px;
+}
+
+.about-steps h3 {
+  font-size: 14px;
+  margin-bottom: 5px;
+}
+
+.about-faq {
+  margin: 0;
+  border-top: 1px solid var(--line);
+}
+
+.about-faq > div {
+  padding: 21px 0;
+  border-bottom: 1px solid var(--line);
+}
+
+.about-faq dt {
+  font-size: 14px;
+  font-weight: 600;
+  line-height: 1.8;
+}
+
+.about-faq dd {
+  margin: 7px 0 0;
+  color: #64705f;
+  font-size: 13px;
+  line-height: 1.95;
+}
+
+.about-data-note h2 {
+  font-size: 16px;
+  margin-bottom: 8px;
+}
+
+.about-data-note p {
+  margin: 0;
+  color: #778171;
+  font-size: 12px;
+  line-height: 1.95;
+}
+
+.about-footer {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 20px;
+  padding: 22px 0;
+  margin-top: 38px;
+  border-top: 1px solid var(--line);
+  color: #778171;
+  font-size: 11px;
+  line-height: 1.8;
+}
+
+.about-footer a {
+  flex: none;
+  color: var(--green);
+  text-decoration: none;
+}
+
+@media (max-width: 760px) {
+  .about-header {
+    min-height: 85px;
+    height: auto;
+    padding: 20px 0;
+    gap: 16px;
+  }
+
+  .about-brand {
+    gap: 10px;
+  }
+
+  .about-brand .brand-mark {
+    flex: none;
+  }
+
+  .about-brand .brand-name {
+    font-size: 17px;
+    letter-spacing: 0;
+  }
+
+  .about-return {
+    font-size: 11px;
+  }
+
+  .about-intro {
+    padding: 32px 0;
+  }
+
+  .about-intro p {
+    font-size: 13px;
+  }
+
+  .about-mode-grid {
+    grid-template-columns: 1fr;
+    gap: 14px;
+  }
+
+  .about-card {
+    padding: 21px;
+  }
+
+  .about-section {
+    margin-bottom: 26px;
+  }
+
+  .about-footer {
+    align-items: flex-start;
+    margin-top: 28px;
+  }
+}
+
+@media (max-width: 400px) {
+  .about-brand .brand-name {
+    font-size: 16px;
+  }
+
+  .about-return span {
+    display: none;
+  }
+
+  .about-card {
+    padding: 18px;
+  }
+}

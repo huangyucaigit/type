@@ -1,0 +1,214 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="description" content="免费的雅思作文打字练习工具，支持导入自己的作文与范文、实时纠错、自定义句子分组默写，并可选中英文查看中文翻译与雅思用法。">
+  <meta name="theme-color" content="#f5f5f0">
+  <meta property="og:type" content="website">
+  <meta property="og:locale" content="zh_CN">
+  <meta property="og:site_name" content="火星叔叔的雅思作文打字练习">
+  <meta property="og:title" content="火星叔叔的雅思作文打字练习｜免费英文打字与范文默写">
+  <meta property="og:description" content="用自己的范文，练熟每一句英文。免费导入文章，支持全文模式与分句模式，结合上下文学习英文表达。">
+  <meta property="og:url" content="https://type.where.work/">
+  <meta name="twitter:card" content="summary">
+  <meta name="twitter:title" content="火星叔叔的雅思作文打字练习｜免费英文打字与范文默写">
+  <meta name="twitter:description" content="用自己的范文，练熟每一句英文。免费导入文章，支持全文模式与分句模式。">
+  <link rel="canonical" href="https://type.where.work/">
+  <title>火星叔叔的雅思作文打字练习｜免费英文打字与范文默写</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='17' fill='%23446955'/%3E%3Cpath d='M18 19h28M32 19v29M24 48h16' fill='none' stroke='%23fff' stroke-width='5' stroke-linecap='round'/%3E%3C/svg%3E">
+  <link rel="stylesheet" href="styles.css">
+  <link rel="stylesheet" href="sentence-mode.css">
+  <script src="typing-core.js" defer></script>
+  <script src="sentence-core.js" defer></script>
+  <script src="sentence-mode.js" defer></script>
+  <script src="reference-selection.js" defer></script>
+  <script src="selection-translation.js" defer></script>
+  <script src="app.js" defer></script>
+</head>
+<body>
+  <div class="page-shell" itemscope itemtype="https://schema.org/WebSite">
+    <meta itemprop="name" content="火星叔叔的雅思作文打字练习">
+    <meta itemprop="alternateName" content="火星叔叔">
+    <meta itemprop="url" content="https://type.where.work/">
+    <meta itemprop="inLanguage" content="zh-CN">
+    <header class="site-header">
+      <a class="brand" href="./index.html" aria-label="火星叔叔的雅思作文打字练习，返回示例练习">
+        <span class="brand-mark" aria-hidden="true">T<span></span></span>
+        <span class="brand-name">火星叔叔<span class="brand-description">雅思作文打字练习</span></span>
+      </a>
+      <nav class="site-nav" aria-label="网站导航"><a href="./about.html">关于与使用帮助</a><a href="./feedback.html">留言反馈</a></nav>
+    </header>
+
+    <main itemprop="mainEntity" itemscope itemtype="https://schema.org/WebApplication">
+      <meta itemprop="url" content="https://type.where.work/">
+      <meta itemprop="applicationCategory" content="EducationalApplication">
+      <meta itemprop="operatingSystem" content="Any">
+      <meta itemprop="inLanguage" content="zh-CN">
+      <meta itemprop="isAccessibleForFree" content="true">
+      <meta itemprop="description" content="免费的雅思作文打字练习工具，支持导入自己的作文与范文、实时纠错、自定义句子分组默写，并可双击英文查看中文翻译与雅思用法。">
+      <section class="intro" aria-labelledby="page-title">
+        <div class="intro-copy">
+          <div class="intro-heading">
+            <h1 id="page-title" itemprop="name">火星叔叔的雅思作文打字练习</h1>
+            <span class="free-badge" itemprop="offers" itemscope itemtype="https://schema.org/Offer"><meta itemprop="price" content="0"><meta itemprop="priceCurrency" content="CNY">免费使用</span>
+          </div>
+          <p>用自己的范文，练熟每一句英文。</p>
+        </div>
+        <div class="mode-switch" role="group" aria-label="选择练习模式">
+          <button id="realtimeModeButton" class="mode-button" type="button" aria-pressed="true" aria-controls="realtimePanel">全文模式</button>
+          <button id="sentenceModeButton" class="mode-button" type="button" aria-pressed="false" aria-controls="sentencePanel">分句模式</button>
+        </div>
+      </section>
+
+      <div class="toolbar" aria-label="练习设置">
+        <div class="toolbar-buttons">
+          <button id="importButton" class="button button-primary" type="button">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 16V4m-4 4 4-4 4 4M5 14v5a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-5"/></svg>
+            导入范文
+          </button>
+          <button id="restartButton" class="button button-secondary" type="button">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 10a8 8 0 1 1 1 7M4 4v6h6"/></svg>
+            重新练习
+          </button>
+        </div>
+        <label class="timer-toggle" for="showTimer">
+          <span>显示秒表</span>
+          <input type="checkbox" id="showTimer" checked>
+          <span class="switch-track" aria-hidden="true"></span>
+        </label>
+      </div>
+
+      <div id="realtimePanel">
+      <section id="practiceCard" class="practice-card" aria-labelledby="articleTitle">
+        <div class="paper-header">
+          <div class="article-heading">
+            <span id="articleKind" class="article-kind">示例范文</span>
+            <h2 id="articleTitle" lang="en">The value of everyday practice</h2>
+            <p id="articleMeta" class="article-meta"></p>
+          </div>
+          <div id="timerDisplay" class="timer-display" aria-label="全文模式秒表">
+            <span class="timer-label"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="13" r="8"/><path d="M12 9v5l3 2M9 2h6M12 2v3"/></svg>练习秒表</span>
+            <span id="timerValue" class="timer-value">00:00</span>
+            <span id="timerState" class="timer-state" role="status" aria-live="polite">未开始</span>
+            <div class="timer-controls" role="group" aria-label="全文模式秒表控制">
+              <button id="timerStart" class="timer-button timer-button-start" type="button" aria-label="开始全文模式秒表">开始</button>
+              <button id="timerPause" class="timer-button" type="button" aria-label="暂停全文模式秒表" disabled>暂停</button>
+              <button id="timerClear" class="timer-button" type="button" aria-label="清空全文模式秒表">清空</button>
+            </div>
+          </div>
+        </div>
+
+        <div class="paper-divider"></div>
+        <p id="typingInstructions" class="sr-only">点击文章开始输入。大小写、标点、空格和换行均需一致。</p>
+        <p id="translationSelectionHelp" class="sr-only">电脑选中英文后双击；手机或 iPad 长按选中英文，再点击“翻译与学习”。</p>
+        <div id="typingArea" class="typing-area">
+          <div id="textDisplay" class="typing-text" lang="en" tabindex="0" role="document" aria-label="英文范文与输入状态" aria-describedby="typingInstructions translationSelectionHelp"></div>
+          <label class="sr-only" for="typingInput">英文打字练习输入区</label>
+          <textarea id="typingInput" class="typing-input" lang="en" spellcheck="false" autocapitalize="off" autocomplete="off" autocorrect="off" aria-describedby="typingInstructions errorHint" aria-details="sourceReadable" wrap="soft"></textarea>
+        </div>
+        <section class="sr-only" aria-label="练习范文原文"><p id="sourceReadable" lang="en"></p></section>
+        <div id="feedbackRow" class="feedback-row" hidden>
+          <p id="errorHint" class="error-hint" role="status" aria-live="polite"></p>
+          <span id="errorCount" class="error-count" hidden></span>
+        </div>
+
+        <div class="paper-footer">
+          <div class="color-legend" aria-label="颜色说明">
+            <span><i class="legend-pending" aria-hidden="true"></i>未输入</span>
+            <span><i class="legend-correct" aria-hidden="true"></i>正确</span>
+            <span><i class="legend-error" aria-hidden="true"></i>待修正</span>
+          </div>
+        </div>
+        <div class="progress-track" aria-hidden="true"><div id="progressFill"></div></div>
+      </section>
+
+      <div class="session-footer">
+        <p id="sessionStatus" class="session-status" role="status" aria-live="polite"><span class="status-dot" aria-hidden="true"></span><span id="statusLabel">准备开始</span></p>
+        <span id="characterProgress" class="character-progress"></span>
+      </div>
+      </div>
+
+      <section id="sentencePanel" aria-labelledby="sentenceArticleTitle" hidden>
+        <div class="sentence-overview practice-card">
+          <div class="paper-header">
+            <div class="article-heading">
+              <span id="sentenceArticleKind" class="article-kind">示例范文 · 分句模式</span>
+              <h2 id="sentenceArticleTitle" lang="en">The value of everyday practice</h2>
+              <p id="sentenceMeta" class="article-meta"></p>
+            </div>
+            <div id="sentenceTimerDisplay" class="sentence-timer timer-display" aria-label="分句模式秒表">
+              <span class="timer-label"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="13" r="8"/><path d="M12 9v5l3 2M9 2h6M12 2v3"/></svg>练习秒表</span>
+              <span id="sentenceTimerValue" class="timer-value">00:00</span>
+              <span id="sentenceTimerState" class="timer-state" role="status" aria-live="polite">未开始</span>
+              <div class="timer-controls" role="group" aria-label="分句模式秒表控制">
+                <button id="sentenceTimerStart" class="timer-button timer-button-start" type="button" aria-label="开始分句模式秒表">开始</button>
+                <button id="sentenceTimerPause" class="timer-button" type="button" aria-label="暂停分句模式秒表" disabled>暂停</button>
+                <button id="sentenceTimerClear" class="timer-button" type="button" aria-label="清空分句模式秒表">清空</button>
+              </div>
+            </div>
+          </div>
+          <div class="sentence-controls">
+            <div class="group-size-control">
+              <label for="sentencesPerGroup">每组句数</label>
+              <input id="sentencesPerGroup" type="number" min="1" step="1" value="1" inputmode="numeric" aria-describedby="sentenceHelp groupingError">
+              <button id="applyGrouping" type="button" class="button button-primary">应用分组</button>
+            </div>
+            <div class="reference-actions">
+              <button id="showAllReferences" type="button" class="button button-secondary">全部显示</button>
+              <button id="hideAllReferences" type="button" class="button button-secondary">全部隐藏</button>
+            </div>
+          </div>
+          <p id="sentenceHelp" class="sr-only">显示范文阅读，隐藏后默写。电脑选中英文后双击；手机或 iPad 长按选中英文，再点击“翻译与学习”。“对照检查”评析表达是否正确、原意是否一致，并对比范文；“逐词核对”检查与范文的用词、大小写和标点，不要求空格数量或换行一致。重新分组会清空本模式输入。</p>
+          <p id="groupingError" class="import-error" role="alert" hidden></p>
+        </div>
+        <div class="sentence-summary">
+          <p id="sentenceSessionStatus" class="sentence-session-status" role="status" aria-live="polite">准备开始</p>
+          <span id="sentenceProgress">正确完成 0 / 0 组</span>
+        </div>
+        <div id="sentenceGroups" class="sentence-groups"></div>
+      </section>
+    </main>
+  </div>
+
+  <div id="selectionLearnAction" class="selection-learn-action" hidden>
+    <button id="selectionLearnButton" class="button button-primary selection-learn-button" type="button" aria-haspopup="dialog" aria-controls="selectionTranslationPopup">翻译与学习</button>
+  </div>
+
+  <section id="selectionTranslationPopup" class="selection-translation-popup" role="dialog" aria-label="选中文字的雅思学习分析" aria-modal="false" hidden>
+    <div class="selection-translation-header">
+      <span>雅思学习 <span id="selectionAnalysisType" class="selection-analysis-type"></span></span>
+      <button id="selectionTranslationClose" class="icon-button" type="button" aria-label="关闭学习分析"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m6 6 12 12M18 6 6 18"/></svg></button>
+    </div>
+    <p id="selectionTranslationSource" class="selection-translation-source" lang="en"></p>
+    <p id="selectionTranslationText" class="selection-translation-text" lang="zh-CN"></p>
+    <div id="selectionAnalysisBrief" class="selection-analysis-brief" lang="zh-CN"></div>
+    <button id="selectionAnalysisExpand" class="button button-secondary selection-analysis-expand" type="button" aria-expanded="false" aria-controls="selectionAnalysisDetails" hidden>展开学习</button>
+    <div id="selectionAnalysisDetails" class="selection-analysis-details" lang="zh-CN" hidden></div>
+    <p id="selectionTranslationStatus" class="selection-translation-status" role="status" aria-live="polite"></p>
+    <button id="selectionTranslationRetry" class="button button-secondary selection-translation-retry" type="button" hidden>重试分析</button>
+  </section>
+
+  <dialog id="importDialog" aria-labelledby="importTitle" aria-describedby="importDescription">
+    <form id="importForm" novalidate>
+      <div class="dialog-header">
+        <div><h2 id="importTitle">导入一篇范文</h2></div>
+        <button id="closeImport" class="icon-button" type="button" aria-label="关闭导入面板"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m6 6 12 12M18 6 6 18"/></svg></button>
+      </div>
+      <p id="importDescription" class="dialog-description">粘贴你的作文，或选择一个纯文本文件。</p>
+      <div class="file-row">
+        <label class="button button-secondary file-button" for="fileInput"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M14 3H6a1 1 0 0 0-1 1v16a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1V8Zm0 0v6h5M9 13h6M9 17h6"/></svg>选择 TXT 文件</label>
+        <input id="fileInput" class="sr-only" type="file" accept=".txt,text/plain" aria-label="选择 TXT 范文文件">
+        <span id="fileName" class="file-name">尚未选择文件</span>
+      </div>
+      <p class="file-note">支持 UTF-8 编码的 TXT 文件。</p>
+      <label class="editor-label" for="sourceEditor">文章内容</label>
+      <textarea id="sourceEditor" class="source-editor" lang="en" placeholder="在这里粘贴你的英文作文或文章…" spellcheck="false"></textarea>
+      <div class="preview-heading"><span>练习预览</span><span id="previewMeta">0 词 · 0 字符</span></div>
+      <pre id="sourcePreview" class="source-preview preview-empty" lang="en">暂无内容</pre>
+      <p id="importError" class="import-error" role="alert" hidden></p>
+      <div class="dialog-footer"><button id="cancelImport" class="button button-secondary" type="button">取消</button><button id="applySource" class="button button-primary" type="submit">开始练习<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14m-5-5 5 5-5 5"/></svg></button></div>
+    </form>
+  </dialog>
+</body>
+</html>

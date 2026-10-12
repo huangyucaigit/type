@@ -1,0 +1,97 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="向火星叔叔的雅思作文打字练习反馈使用问题与建议。留言提交后公开展示，同一浏览器每天可提交一次。">
+  <meta name="theme-color" content="#f5f5f0">
+  <meta name="robots" content="noindex,follow">
+  <meta property="og:type" content="website">
+  <meta property="og:locale" content="zh_CN">
+  <meta property="og:site_name" content="火星叔叔的雅思作文打字练习">
+  <meta property="og:title" content="留言反馈｜火星叔叔的雅思作文打字练习">
+  <meta property="og:description" content="反馈练习中的问题，分享你的使用建议。留言提交后公开展示，每天可提交一次。">
+  <meta property="og:url" content="https://type.where.work/feedback.html">
+  <meta name="twitter:card" content="summary">
+  <meta name="twitter:title" content="留言反馈｜火星叔叔的雅思作文打字练习">
+  <meta name="twitter:description" content="反馈练习中的问题，分享你的使用建议。">
+  <link rel="canonical" href="https://type.where.work/feedback.html">
+  <title>留言反馈｜火星叔叔的雅思作文打字练习</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='17' fill='%23446955'/%3E%3Cpath d='M18 19h28M32 19v29M24 48h16' fill='none' stroke='%23fff' stroke-width='5' stroke-linecap='round'/%3E%3C/svg%3E">
+  <link rel="stylesheet" href="styles.css">
+  <link rel="stylesheet" href="feedback.css">
+  <script src="feedback.js" defer></script>
+</head>
+<body>
+  <div class="page-shell feedback-shell">
+    <header class="site-header feedback-header">
+      <a class="brand feedback-brand" href="./index.html" aria-label="火星叔叔的雅思作文打字练习，返回练习">
+        <span class="brand-mark" aria-hidden="true">T<span></span></span>
+        <span class="brand-name">火星叔叔<span class="brand-description">雅思作文打字练习</span></span>
+      </a>
+      <nav class="feedback-nav" aria-label="网站导航">
+        <a href="./index.html">返回练习</a>
+        <a href="./about.html">使用帮助</a>
+        <a href="./feedback.html" aria-current="page">留言反馈</a>
+      </nav>
+    </header>
+
+    <main id="main-content">
+      <section class="feedback-intro" aria-labelledby="feedback-title">
+        <h1 id="feedback-title">留言反馈</h1>
+        <p>遇到了什么问题，或希望增加什么功能？</p>
+      </section>
+
+      <section class="feedback-card feedback-compose" aria-labelledby="compose-title">
+        <h2 id="compose-title">写下你的反馈</h2>
+        <p class="feedback-note" id="publicationNotice">留言提交后公开展示，请勿填写联系方式等个人信息。每天可提交一次（北京时间）。</p>
+        <form id="feedbackForm" aria-describedby="publicationNotice privacyNotice" novalidate>
+          <div class="feedback-field feedback-nickname-field">
+            <label for="feedbackNickname">昵称 <span>（选填）</span></label>
+            <input id="feedbackNickname" name="nickname" type="text" maxlength="40" autocomplete="off" placeholder="匿名访客" aria-describedby="nicknameError">
+            <p class="feedback-field-error" id="nicknameError"></p>
+          </div>
+          <div class="feedback-field">
+            <label for="feedbackMessage">留言</label>
+            <textarea id="feedbackMessage" name="message" rows="5" maxlength="2000" minlength="5" required aria-describedby="messageCount messageError" placeholder="请描述使用问题或建议，5–1000 字。"></textarea>
+            <div class="feedback-message-meta">
+              <p class="feedback-field-error" id="messageError"></p>
+              <span class="feedback-count" id="messageCount">0 / 1000</span>
+            </div>
+          </div>
+          <div hidden aria-hidden="true">
+            <label for="feedbackWebsite">网站</label>
+            <input id="feedbackWebsite" name="website" type="text" tabindex="-1" autocomplete="off">
+          </div>
+          <p class="feedback-note feedback-privacy" id="privacyNotice">提交时使用浏览器特征摘要与匿名标识限制重复留言。</p>
+          <label class="feedback-consent" for="feedbackConsent">
+            <input id="feedbackConsent" type="checkbox">
+            <span>同意使用浏览器特征摘要限制重复留言</span>
+          </label>
+          <div class="feedback-submit-row">
+            <button class="button button-primary" id="feedbackSubmit" type="submit" disabled>提交留言</button>
+            <p class="feedback-quota" id="feedbackQuota" role="status" aria-live="polite"></p>
+          </div>
+          <p class="feedback-form-status" id="feedbackFormStatus" role="status" aria-live="polite"></p>
+        </form>
+      </section>
+
+      <section class="feedback-public" aria-labelledby="messages-title">
+        <div class="feedback-list-header">
+          <h2 id="messages-title">大家的留言</h2>
+          <button class="button button-secondary feedback-refresh" id="feedbackRefresh" type="button">刷新留言</button>
+        </div>
+        <p class="feedback-list-status" id="feedbackListStatus" role="status" aria-live="polite">正在加载留言…</p>
+        <ol class="feedback-list" id="feedbackMessages" aria-label="公开留言"></ol>
+        <button class="button button-secondary feedback-more" id="feedbackMore" type="button" hidden>加载更多</button>
+      </section>
+      <noscript><p class="feedback-noscript">请开启浏览器的 JavaScript 功能后查看和提交留言。</p></noscript>
+    </main>
+
+    <footer class="feedback-footer">
+      <span>火星叔叔的雅思作文打字练习</span>
+      <a href="./index.html">返回练习 →</a>
+    </footer>
+  </div>
+</body>
+</html>
