@@ -7,9 +7,21 @@ const path = require('node:path');
 const vm = require('node:vm');
 const { TextDecoder, TextEncoder } = require('node:util');
 
+const ARTICLE_STORAGE_KEY = 'mars-ielts-typing:article:v1';
+function memoryStorage(initial = {}) {
+  const values = new Map(Object.entries(initial));
+  const writes = [];
+  return {
+    writes,
+    getItem(key) { return values.has(key) ? values.get(key) : null; },
+    setItem(key, value) { values.set(key, String(value)); writes.push({ key, value: String(value) }); },
+    removeItem(key) { values.delete(key); },
+  };
+}
+
 // Run the actual browser scripts against a small event/element harness. Layout,
 // native text selection and file pickers are verified separately in a browser.
-function createPage({ fetch } = {}) {
+function createPage({ fetch, storage = memoryStorage(), storageGetter } = {}) {
   const elements = new Map();
   const intervals = [];
   const frames = new Map();
@@ -106,9 +118,22 @@ function createPage({ fetch } = {}) {
     setInterval(callback) { intervals.push(callback); },
   });
   context.window = context;
+  Object.defineProperty(context, 'localStorage', { get: storageGetter || (() => storage) });
   context.innerHeight = 900;
   context.addEventListener = () => {};
   context.scrollBy = () => {};
+  const sentence = { created: [], sources: [], active: [], resets: [], visibility: [], refreshes: 0 };
+  context.SentencePractice = { create(options) {
+    sentence.created.push({ source: options.source, title: options.title, kind: options.kind });
+    return {
+      setSource(source, title, kind) { sentence.sources.push({ source, title, kind }); },
+      setActive(active) { sentence.active.push(active); },
+      reset(focus) { sentence.resets.push(focus); },
+      setTimerVisible(visible) { sentence.visibility.push(visible); },
+      refreshTimer() { sentence.refreshes += 1; },
+      getLearningSources() { return []; },
+    };
+  } };
   for (const name of ['typing-core.js', 'reference-selection.js', 'selection-translation.js', 'app.js']) {
     vm.runInContext(fs.readFileSync(path.join(__dirname, '..', name), 'utf8'), context, { filename: name });
   }
@@ -117,6 +142,8 @@ function createPage({ fetch } = {}) {
 
   return {
     $,
+    storage,
+    sentence,
     fire: (id, name, properties) => $(id).emit(name, properties),
     open: () => $('importButton').emit('click'),
     draft(text) { $('sourceEditor').value = text; return $('sourceEditor').emit('input'); },
@@ -423,4 +450,240 @@ test('clear preserves completed text and its lock while the stopwatch can be sta
   await page.fire('timerStart', 'click');
   page.tick(2200);
   assert.equal(page.$('timerValue').textContent, '00:02');
+});
+
+test('a successfully pasted article survives a new page while typing and timing start empty', async () => {
+  const storage = memoryStorage();
+  const page = createPage({ storage });
+  assert.equal(storage.writes.length, 0, 'opening the sample must not save it as an import');
+  await page.open();
+  await page.draft(' \tFirst\tparagraph.\r\n\r\nSecond  paragraph. \r\n');
+  await page.fire('importForm', 'submit');
+  const text = 'First paragraph.\n\nSecond  paragraph.';
+  assert.deepEqual(JSON.parse(storage.getItem(ARTICLE_STORAGE_KEY)), {
+    version: 1, text, title: '我的英文范文',
+  });
+  assert.equal(page.$('articleStorageNotice').hidden, true);
+  assert.deepEqual(page.sentence.sources, [{ source: text, title: '我的英文范文', kind: '我的范文' }]);
+  await page.type('First');
+  await page.fire('timerStart', 'click');
+  page.tick(4200);
+  const restored = createPage({ storage });
+  assert.equal(restored.$('sourceReadable').textContent, text);
+  assert.equal(restored.$('articleTitle').textContent, '我的英文范文');
+  assert.equal(restored.$('articleKind').textContent, '我的范文');
+  assert.deepEqual(restored.sentence.created, [{ source: text, title: '我的英文范文', kind: '我的范文' }]);
+  assert.equal(restored.$('typingInput').value, '');
+  assert.equal(restored.$('typingInput').readOnly, false);
+  assert.equal(restored.$('statusLabel').textContent, '准备开始');
+  assert.equal(restored.$('timerValue').textContent, '00:00');
+  assert.equal(restored.$('timerState').textContent, '未开始');
+  assert.equal(restored.$('progressFill').style.width, '0%');
+  assert.equal(storage.writes.length, 1);
+});
+
+test('a TXT import saves the applied preview and filename title only after confirmation', async () => {
+  const storage = memoryStorage();
+  const page = createPage({ storage });
+  await page.open();
+  await page.choose(file('My IELTS essay.TXT', '\uFEFF  First\tpart.\r\n\r\nTwo  spaces.  '));
+  assert.equal(storage.getItem(ARTICLE_STORAGE_KEY), null, 'reading a file is only a preview');
+  const preview = page.$('sourcePreview').textContent;
+  await page.fire('importForm', 'submit');
+  const restored = createPage({ storage });
+  assert.equal(restored.$('sourceReadable').textContent, preview);
+  assert.equal(restored.$('articleTitle').textContent, 'My IELTS essay');
+  assert.deepEqual(restored.sentence.created, [{ source: preview, title: 'My IELTS essay', kind: '我的范文' }]);
+});
+
+test('TXT filenames produce a trimmed nonempty title that remains restorable', async () => {
+  for (const [filename, title] of [['  My essay  .txt', 'My essay'], ['  .txt', '我的英文范文']]) {
+    const storage = memoryStorage();
+    const page = createPage({ storage });
+    await page.open();
+    await page.choose(file(filename, 'The imported article must survive.'));
+    await page.fire('importForm', 'submit');
+    assert.equal(page.$('articleTitle').textContent, title);
+    assert.equal(JSON.parse(storage.getItem(ARTICLE_STORAGE_KEY)).title, title);
+    const restored = createPage({ storage });
+    assert.equal(restored.$('articleTitle').textContent, title);
+    assert.equal(restored.$('sourceReadable').textContent, 'The imported article must survive.');
+  }
+});
+
+test('another confirmed article replaces the saved article without saving practice actions', async () => {
+  const storage = memoryStorage();
+  const page = createPage({ storage });
+  await page.open();
+  await page.choose(file('First.txt', 'The first essay.'));
+  await page.fire('importForm', 'submit');
+  const saved = storage.getItem(ARTICLE_STORAGE_KEY);
+  await page.type('The');
+  await page.fire('timerStart', 'click');
+  page.tick(2300);
+  await page.fire('timerPause', 'click');
+  await page.fire('timerClear', 'click');
+  await page.fire('restartButton', 'click');
+  await page.fire('sentenceModeButton', 'click');
+  await page.fire('restartButton', 'click');
+  await page.fire('realtimeModeButton', 'click');
+  assert.equal(storage.getItem(ARTICLE_STORAGE_KEY), saved);
+  assert.equal(storage.writes.length, 1);
+  await page.open();
+  await page.draft('The second essay.');
+  await page.fire('importForm', 'submit');
+  assert.equal(storage.writes.length, 2);
+  const restored = createPage({ storage });
+  assert.equal(restored.$('sourceReadable').textContent, 'The second essay.');
+  assert.equal(restored.$('articleTitle').textContent, '我的英文范文');
+});
+
+test('cancelled drafts, empty submissions, file previews and pending reads preserve the saved article', async () => {
+  const saved = JSON.stringify({ version: 1, text: 'The saved article.', title: 'Saved title' });
+  const storage = memoryStorage({ [ARTICLE_STORAGE_KEY]: saved });
+  const page = createPage({ storage });
+  await page.open();
+  await page.draft('An abandoned draft.');
+  await page.fire('cancelImport', 'click');
+  await page.open();
+  await page.draft(' \t\r\n ');
+  await page.fire('importForm', 'submit');
+  assert.equal(page.$('importDialog').open, true);
+  await page.choose(file('Preview.txt', 'Only previewed.'));
+  await page.fire('cancelImport', 'click');
+  await page.open();
+  await page.draft('Draft before reading.');
+  const reading = delayedFile('Pending.txt');
+  const pending = page.choose(reading.file);
+  await page.fire('importForm', 'submit');
+  assert.equal(page.$('sourceReadable').textContent, 'The saved article.');
+  await page.fire('cancelImport', 'click');
+  reading.resolve('A stale file result.');
+  await pending;
+  assert.equal(storage.getItem(ARTICLE_STORAGE_KEY), saved);
+  assert.equal(storage.writes.length, 0);
+  assert.equal(createPage({ storage }).$('sourceReadable').textContent, 'The saved article.');
+});
+
+test('invalid, empty, unreadable and incorrectly encoded TXT files never overwrite a saved article', async () => {
+  const saved = JSON.stringify({ version: 1, text: 'Keep the last import.', title: 'My original title' });
+  const invalidFiles = [
+    { name: 'wrong.csv' },
+    file('empty.txt', ' \r\n\t '),
+    { name: 'broken.txt', arrayBuffer: async () => { throw new Error('Read failed'); } },
+    { name: 'encoding.txt', arrayBuffer: async () => Uint8Array.from([0xff, 0xfe]).buffer },
+  ];
+  for (const invalidFile of invalidFiles) {
+    const storage = memoryStorage({ [ARTICLE_STORAGE_KEY]: saved });
+    const page = createPage({ storage });
+    await page.open();
+    await page.choose(invalidFile);
+    assert.equal(page.$('importError').hidden, false);
+    await page.fire('importForm', 'submit');
+    assert.equal(storage.getItem(ARTICLE_STORAGE_KEY), saved);
+    assert.equal(storage.writes.length, 0);
+    assert.equal(page.$('sourceReadable').textContent, 'Keep the last import.');
+  }
+});
+
+test('malformed or unsupported saved records fall back consistently to the sample in both modes', () => {
+  const sample = createPage().$('sourceReadable').textContent;
+  const invalidRecords = [
+    '{broken', 'null', '[]', '"a string"', '42',
+    JSON.stringify({ version: 2, text: 'Wrong version.', title: 'Title' }),
+    JSON.stringify({ version: 1, text: ' \r\n\t ', title: 'Title' }),
+    JSON.stringify({ version: 1, text: 123, title: 'Title' }),
+    JSON.stringify({ version: 1, text: {}, title: 'Title' }),
+    JSON.stringify({ version: 1, text: 'Article.', title: null }),
+    JSON.stringify({ version: 1, text: 'Article.', title: ' \t\r\n ' }),
+    JSON.stringify({ text: 'Article.', title: 'Title' }),
+  ];
+  for (const invalidRecord of invalidRecords) {
+    const storage = memoryStorage({ [ARTICLE_STORAGE_KEY]: invalidRecord });
+    const page = createPage({ storage });
+    assert.equal(page.$('sourceReadable').textContent, sample);
+    assert.equal(page.$('articleTitle').textContent, 'The value of everyday practice');
+    assert.equal(page.$('articleKind').textContent, '示例范文');
+    assert.deepEqual(page.sentence.created, [{ source: sample, title: 'The value of everyday practice', kind: '示例范文' }]);
+    assert.equal(storage.writes.length, 0, 'a fallback must not replace the last stored value');
+  }
+});
+
+test('restoring a valid record normalizes its source and title without persisting an initial practice', () => {
+  const storage = memoryStorage({ [ARTICLE_STORAGE_KEY]: JSON.stringify({
+    version: 1, text: '\uFEFF  One\tline.\r\n\r\nSecond  paragraph.  ', title: '  My saved title  ',
+  }) });
+  const page = createPage({ storage });
+  assert.equal(page.$('sourceReadable').textContent, 'One line.\n\nSecond  paragraph.');
+  assert.equal(page.$('articleTitle').textContent, 'My saved title');
+  assert.deepEqual(page.sentence.created, [{ source: 'One line.\n\nSecond  paragraph.', title: 'My saved title', kind: '我的范文' }]);
+  assert.equal(storage.writes.length, 0);
+});
+
+test('unavailable storage and a throwing storage getter cannot prevent opening or importing an article', async () => {
+  const cases = [
+    { storage: null },
+    { storageGetter: () => { throw new Error('Browser storage disabled'); } },
+  ];
+  for (const options of cases) {
+    const page = createPage(options);
+    assert.match(page.$('sourceReadable').textContent, /^Learning a language/);
+    await page.open();
+    await page.draft('Practice still works.');
+    await page.fire('importForm', 'submit');
+    assert.equal(page.$('sourceReadable').textContent, 'Practice still works.');
+    assert.equal(page.$('importDialog').open, false);
+    assert.equal(page.$('articleStorageNotice').hidden, false);
+    assert.match(page.$('articleStorageNotice').textContent, /保存|保留/);
+    assert.match(page.$('articleStorageNotice').textContent, /无法|未能|不能|失败|不会|未保存|未.*保存/);
+    await page.type('Practice');
+    assert.equal(page.$('statusLabel').textContent, '练习中');
+    assert.deepEqual(page.sentence.sources, [{ source: 'Practice still works.', title: '我的英文范文', kind: '我的范文' }]);
+  }
+});
+
+test('a storage read failure falls back to the sample and does not prevent a later successful save', async () => {
+  const storage = memoryStorage();
+  storage.getItem = () => { throw new Error('Cannot read storage'); };
+  const page = createPage({ storage });
+  assert.match(page.$('sourceReadable').textContent, /^Learning a language/);
+  await page.open();
+  await page.draft('A new article can be saved.');
+  await page.fire('importForm', 'submit');
+  assert.equal(page.$('sourceReadable').textContent, 'A new article can be saved.');
+  assert.equal(storage.writes.length, 1);
+  assert.deepEqual(JSON.parse(storage.writes[0].value), { version: 1, text: 'A new article can be saved.', title: '我的英文范文' });
+  assert.equal(page.$('articleStorageNotice').hidden, true);
+});
+
+test('a failed write preserves the stored article and the new practice, and the next successful save clears its notice', async () => {
+  const saved = JSON.stringify({ version: 1, text: 'The earlier saved article.', title: 'Earlier' });
+  const storage = memoryStorage({ [ARTICLE_STORAGE_KEY]: saved });
+  const originalSetItem = storage.setItem;
+  storage.setItem = () => { throw new Error('Storage quota exhausted'); };
+  const page = createPage({ storage });
+  await page.open();
+  await page.draft('This article is usable without persistence.');
+  await page.fire('importForm', 'submit');
+  assert.equal(page.$('sourceReadable').textContent, 'This article is usable without persistence.');
+  assert.equal(storage.getItem(ARTICLE_STORAGE_KEY), saved);
+  assert.equal(page.$('articleStorageNotice').hidden, false);
+  assert.match(page.$('articleStorageNotice').textContent, /保存|保留/);
+  assert.match(page.$('articleStorageNotice').textContent, /无法|未能|不能|失败|不会|未保存|未.*保存/);
+  assert.equal(createPage({ storage }).$('sourceReadable').textContent, 'The earlier saved article.');
+  storage.setItem = originalSetItem;
+  await page.open();
+  await page.draft('This one is saved successfully.');
+  await page.fire('importForm', 'submit');
+  assert.equal(page.$('articleStorageNotice').hidden, true);
+  assert.equal(createPage({ storage }).$('sourceReadable').textContent, 'This one is saved successfully.');
+});
+
+test('separate browser storage starts independently while explicitly shared storage restores an import', async () => {
+  const first = createPage();
+  await first.open();
+  await first.draft('Only saved in the first browser.');
+  await first.fire('importForm', 'submit');
+  assert.match(createPage().$('sourceReadable').textContent, /^Learning a language/);
+  assert.equal(createPage({ storage: first.storage }).$('sourceReadable').textContent, 'Only saved in the first browser.');
 });

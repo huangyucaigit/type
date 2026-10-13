@@ -10,8 +10,37 @@
   const clock = new PracticeClock();
   const sample = "Learning a language is a journey that rewards patience and regular practice. Although progress may seem slow at first, small efforts made every day can lead to lasting improvements. Writing, in particular, helps learners organise their thoughts and express ideas with greater confidence.\n\nRather than aiming for perfection, students should focus on building a consistent routine. Reading a well-written article, noticing how its sentences connect, and typing it carefully can all be valuable steps. Over time, familiar words and useful expressions become easier to recall. The most important thing is to keep going, one sentence at a time.";
 
-  let source = normalizeSource(sample);
-  let articleTitle = "The value of everyday practice";
+  const ARTICLE_STORAGE_KEY = "mars-ielts-typing:article:v1";
+
+  function readSavedArticle() {
+    try {
+      const saved = JSON.parse(window.localStorage.getItem(ARTICLE_STORAGE_KEY));
+      if (!saved || Array.isArray(saved) || saved.version !== 1
+        || typeof saved.text !== "string" || typeof saved.title !== "string") return null;
+      const text = normalizeSource(saved.text);
+      const title = saved.title.trim();
+      return text && title ? { text, title } : null;
+    } catch {
+      return null;
+    }
+  }
+
+  function saveArticle(text, title) {
+    const notice = $("articleStorageNotice");
+    try {
+      window.localStorage.setItem(ARTICLE_STORAGE_KEY, JSON.stringify({ version: 1, text, title }));
+      notice.hidden = true;
+      notice.textContent = "";
+    } catch {
+      notice.textContent = "浏览器未能保存这篇文章；本次仍可练习，刷新后可能恢复旧文章。请检查存储空间或浏览器隐私设置。";
+      notice.hidden = false;
+    }
+  }
+
+  const savedArticle = readSavedArticle();
+  let source = savedArticle?.text || normalizeSource(sample);
+  let articleTitle = savedArticle?.title || "The value of everyday practice";
+  let articleKind = savedArticle ? "我的范文" : "示例范文";
   let result = compare(source, "");
   let nodes = [];
   let rendered = [];
@@ -23,7 +52,7 @@
   let lastTimer = "";
   let activeMode = "realtime";
   let selectionTranslation = null;
-  const sentencePractice = window.SentencePractice?.create({ source, title: articleTitle, kind: "示例范文",
+  const sentencePractice = window.SentencePractice?.create({ source, title: articleTitle, kind: articleKind,
     onLearningReset: () => selectionTranslation?.reset() });
   const caret = document.createElement("span");
   caret.className = "caret-anchor";
@@ -201,6 +230,7 @@
     nodes = [];
     rendered = [];
     display.replaceChildren();
+    $("articleKind").textContent = articleKind;
     $("articleTitle").textContent = articleTitle;
     $("articleTitle").title = articleTitle;
     const paragraphs = source.split(/\n\s*\n/u).length;
@@ -338,8 +368,9 @@
       return;
     }
     source = text;
-    articleTitle = fileTitle || "我的英文范文";
-    $("articleKind").textContent = "我的范文";
+    articleTitle = fileTitle.trim() || "我的英文范文";
+    articleKind = "我的范文";
+    saveArticle(source, articleTitle);
     dialog.close();
     resetPractice(activeMode === "realtime");
     sentencePractice?.setSource(source, articleTitle, "我的范文");
