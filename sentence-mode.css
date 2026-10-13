@@ -354,10 +354,14 @@
   opacity: 0;
   visibility: hidden;
 }
-.sentence-group-actions [data-shortcut]:hover ~ .sentence-shortcut-hint,
-.sentence-group-actions [data-shortcut]:focus-visible ~ .sentence-shortcut-hint {
+.sentence-group-actions [data-shortcut]:hover + .sentence-shortcut-hint,
+.sentence-group-actions [data-shortcut]:focus-visible + .sentence-shortcut-hint {
   opacity: 1;
   visibility: visible;
+}
+.sentence-group-actions:has([data-shortcut]:hover) [data-shortcut]:focus-visible:not(:hover) + .sentence-shortcut-hint {
+  opacity: 0;
+  visibility: hidden;
 }
 .sentence-summary {
   display: flex;

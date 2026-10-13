@@ -176,7 +176,7 @@
       item.reviewPending = false;
       if (item.checkButton) {
         item.checkButton.disabled = false;
-        item.checkButton.textContent = "对照检查";
+        item.checkButton.textContent = "表达评析";
       }
       item.card?.setAttribute("aria-busy", "false");
     }
@@ -279,7 +279,7 @@
       const answer = item.draft.trim();
       const reference = item.text.trim();
       if (!answer || !/[A-Za-z]/u.test(answer)) {
-        item.feedback.textContent = "请先输入英文，再进行对照检查。";
+        item.feedback.textContent = "请先输入英文，再进行表达评析。";
         item.feedback.className = "group-feedback has-errors";
         item.answer.focus({ preventScroll: true });
         return;
@@ -319,7 +319,7 @@
             signal: controller.signal,
           });
         } catch {
-          throw new Error(timedOut ? "评析等待超时，请点击“对照检查”重试。" : "暂时无法连接评析服务，请重试，或使用“逐词核对”。");
+          throw new Error(timedOut ? "评析等待超时，请点击“表达评析”重试。" : "暂时无法连接评析服务，请重试，或使用“逐词核对”。");
         }
         let data;
         try { data = await response.json(); } catch { throw new Error("评析结果格式异常，请重新检查。"); }
@@ -363,7 +363,7 @@
           item.reviewPending = false;
           item.reviewController = null;
           item.checkButton.disabled = false;
-          item.checkButton.textContent = "对照检查";
+          item.checkButton.textContent = "表达评析";
           item.card.setAttribute("aria-busy", "false");
         }
       }
@@ -513,30 +513,41 @@
       actions.setAttribute("aria-label", `第 ${number} 组练习操作`);
       item.editButton = button("修改输入", "button button-secondary group-edit", () => edit(item));
       item.editButton.hidden = true;
-      item.checkButton = button("对照检查", "button button-primary group-check", () => review(item));
-      item.checkButton.setAttribute("aria-label", `第 ${number} 组对照检查，评析英文表达`);
+      item.checkButton = button("表达评析", "button button-primary group-check", () => review(item));
+      item.checkButton.setAttribute("aria-label", `第 ${number} 组表达评析，评析英文表达`);
       const strictButton = button("逐词核对", "button button-secondary group-word-check", () => checkWords(item));
       strictButton.setAttribute("aria-label", `第 ${number} 组逐词核对，与范文严格比对`);
-      const shortcutHint = "Ctrl+Enter（Mac：⌘+Enter）：核对 / 返回输入";
-      const shortcutTooltip = element("span", "sentence-shortcut-hint", shortcutHint);
-      shortcutTooltip.id = `sentenceShortcut-${number}`;
-      shortcutTooltip.setAttribute("role", "tooltip");
-      for (const action of [strictButton, item.editButton]) {
-        action.setAttribute("data-shortcut", shortcutHint);
-        action.setAttribute("aria-describedby", shortcutTooltip.id);
+      function shortcutAction(action, hint, id) {
+        const tooltip = element("span", "sentence-shortcut-hint", hint);
+        tooltip.id = id;
+        tooltip.setAttribute("role", "tooltip");
+        action.setAttribute("data-shortcut", hint);
+        action.setAttribute("aria-describedby", tooltip.id);
+        actions.append(action, tooltip);
       }
-      actions.append(item.checkButton, strictButton, item.toggle, item.translationToggle, item.editButton);
-      actions.append(shortcutTooltip);
+      shortcutAction(item.checkButton, "Ctrl+Shift+Enter（Mac：⌘+Shift+Enter）：表达评析 / 返回输入", `sentenceReviewShortcut-${number}`);
+      shortcutAction(strictButton, "Ctrl+Enter（Mac：⌘+Enter）：逐词核对 / 返回输入", `sentenceShortcut-${number}`);
+      actions.append(item.toggle, item.translationToggle);
+      shortcutAction(item.editButton, "返回输入：Ctrl+Enter 或 Ctrl+Shift+Enter（Mac：⌘+Enter 或 ⌘+Shift+Enter）", `sentenceEditShortcut-${number}`);
       card.addEventListener("keydown", (event) => {
-        if (event.key !== "Enter" || !(event.ctrlKey || event.metaKey) || event.altKey || event.shiftKey
-          || event.repeat || event.isComposing || event.keyCode === 229 || item.composing
+        if (event.key !== "Enter" || !(event.ctrlKey || event.metaKey) || event.altKey
+          || event.isComposing || event.keyCode === 229 || item.composing
           || !active || !items.includes(item)) return;
         const editing = event.target === item.answer && !item.answer.hidden && item.answer.value.trim();
         const checked = !item.checkedAnswer.hidden
           && (item.checkedAnswer.contains(event.target) || actions.contains(event.target));
         if (!editing && !checked) return;
+        if (event.repeat) {
+          if (editing && event.shiftKey && item.reviewPending) event.preventDefault();
+          return;
+        }
         event.preventDefault();
         if (checked) edit(item);
+        else if (event.shiftKey) {
+          if (item.reviewPending) return;
+          item.draft = item.answer.value;
+          void review(item);
+        }
         else {
           item.draft = item.answer.value;
           checkWords(item);

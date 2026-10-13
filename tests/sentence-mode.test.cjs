@@ -1337,8 +1337,11 @@ test('reset, import, regroup, local check and mode switches invalidate pending A
     await page.type(0, 'First sentence.');
     const old = page.group(0);
     const work = page.click(old.review);
+    assert.equal(old.review.textContent, '评析中…', name);
     await action(page);
     assert.equal(signal.aborted, true, name);
+    assert.equal(old.review.textContent, '表达评析', name);
+    assert.equal(page.group(0).review.textContent, '表达评析', name);
     pending.resolve(reviewed('First sentence.'));
     await work;
     assert.equal(page.group(0).reviewPanel.hidden, true, name);
@@ -1719,10 +1722,10 @@ test('ordinary Enter, other modifiers and repeated or composing shortcut keys ke
     { altKey: true },
     { key: 'k', ctrlKey: true },
     { key: 'k', metaKey: true },
-    { ctrlKey: true, shiftKey: true },
-    { metaKey: true, shiftKey: true },
     { ctrlKey: true, altKey: true },
     { metaKey: true, altKey: true },
+    { ctrlKey: true, shiftKey: true, altKey: true },
+    { metaKey: true, shiftKey: true, altKey: true },
     { ctrlKey: true, repeat: true },
     { metaKey: true, repeat: true },
     { ctrlKey: true, isComposing: true },
@@ -1840,8 +1843,8 @@ test('returning by shortcut preserves native Enter, modifier, repeat and composi
   await page.click(group.check);
   const keys = [
     {}, { shiftKey: true }, { key: 'k', ctrlKey: true },
-    { ctrlKey: true, shiftKey: true }, { metaKey: true, shiftKey: true },
     { ctrlKey: true, altKey: true }, { metaKey: true, altKey: true },
+    { ctrlKey: true, shiftKey: true, altKey: true }, { metaKey: true, shiftKey: true, altKey: true },
     { ctrlKey: true, repeat: true }, { metaKey: true, repeat: true },
     { ctrlKey: true, isComposing: true }, { metaKey: true, isComposing: true },
     { ctrlKey: true, keyCode: 229 }, { metaKey: true, keyCode: 229 },
@@ -1858,20 +1861,229 @@ test('returning by shortcut preserves native Enter, modifier, repeat and composi
   assert.equal(group.answer.hidden, false);
 });
 
-test('only local check and edit buttons advertise their available keyboard shortcuts', () => {
+test('review, local check and edit buttons have separate tooltips for their available shortcuts', () => {
   const page = createPage();
-  const group = page.group(0);
-  const tooltip = page.find(group.card, 'sentence-shortcut-hint')[0];
-  assert.equal(tooltip.getAttribute('role'), 'tooltip');
-  for (const [control, action] of [[group.check, /核对/], [group.edit, /返回输入/]]) {
-    const hint = control.getAttribute('data-shortcut');
-    assert.match(hint, /Ctrl\+Enter/);
-    assert.match(hint, /⌘\+Enter/);
-    assert.equal(control.getAttribute('aria-describedby'), tooltip.id);
-    assert.match(tooltip.textContent, /Ctrl\+Enter/);
-    assert.match(tooltip.textContent, /⌘\+Enter/);
-    assert.match(tooltip.textContent, action);
+  const ids = [];
+  for (let index = 0; index < page.groups().length; index++) {
+    const group = page.group(index);
+    assert.equal(group.review.textContent, '表达评析');
+    assert.match(group.review.getAttribute('aria-label'), /表达评析/);
+    assert.doesNotMatch(group.review.getAttribute('aria-label'), /对照检查/);
+    for (const [control, expectedId, action, shortcut] of [
+      [group.check, `sentenceShortcut-${index + 1}`, /核对/, /Ctrl\+Enter.*⌘\+Enter/],
+      [group.review, `sentenceReviewShortcut-${index + 1}`, /评析/, /Ctrl\+Shift\+Enter.*⌘\+Shift\+Enter/],
+      [group.edit, null, /返回输入/, /Ctrl\+Shift\+Enter.*⌘\+Shift\+Enter/],
+    ]) {
+      const tooltip = control.nextSibling;
+      assert.equal(tooltip?.getAttribute('role'), 'tooltip');
+      assert.equal(tooltip.classList.contains('sentence-shortcut-hint'), true);
+      assert.equal(control.getAttribute('aria-describedby'), tooltip.id);
+      if (expectedId) assert.equal(tooltip.id, expectedId);
+      assert.ok(tooltip.id);
+      assert.match(control.getAttribute('data-shortcut'), shortcut);
+      assert.match(tooltip.textContent, shortcut);
+      assert.match(tooltip.textContent, action);
+      if (control === group.edit) {
+        assert.match(control.getAttribute('data-shortcut'), /Ctrl\+Enter.*⌘\+Enter/);
+        assert.match(tooltip.textContent, /Ctrl\+Enter.*⌘\+Enter/);
+      }
+      if (control === group.check) assert.doesNotMatch(tooltip.textContent, /Shift/);
+      ids.push(tooltip.id);
+    }
   }
-  assert.equal(group.review.getAttribute('data-shortcut'), null);
-  assert.doesNotMatch(group.review.title || group.review.getAttribute('title') || '', /Ctrl\+Enter|⌘\+Enter/);
+  assert.equal(new Set(ids).size, ids.length);
+});
+
+test('Ctrl+Shift+Enter and Command+Shift+Enter review only the focused draft and return to input', async () => {
+  for (const modifier of [{ ctrlKey: true }, { metaKey: true }]) {
+    const requests = [];
+    const answer = 'English is something we study daily.';
+    const draft = '  ' + answer + '\n';
+    const page = createPage({ source: 'We learn English every day. Another sentence.', fetch: async (url, options) => {
+      requests.push({ url, ...JSON.parse(options.body) });
+      return reviewed(answer);
+    } });
+    await page.type(0, draft);
+    await page.type(1, 'Another private draft.');
+    const group = page.group(0), other = page.group(1);
+    group.answer.focus();
+    assert.equal(await page.key(page.document.activeElement, { ...modifier, shiftKey: true }), true);
+    await new Promise(setImmediate);
+    assert.deepEqual(requests, [{ url: '/api/review', reference: 'We learn English every day.', answer }]);
+    assert.equal(group.reviewPanel.hidden, false);
+    assert.equal(group.checked.textContent, draft);
+    assert.equal(page.find(group.checked, 'word-error').length, 0);
+    assert.equal(page.document.activeElement, group.checked);
+    assert.equal(other.answer.value, 'Another private draft.');
+    assert.equal(other.answer.hidden, false);
+    assert.equal(other.checked.hidden, true);
+    assert.equal(other.reviewPanel.hidden, true);
+
+    assert.equal(await page.key(page.document.activeElement, { ...modifier, shiftKey: true }), true);
+    assert.equal(page.document.activeElement, group.answer);
+    assert.equal(group.answer.hidden, false);
+    assert.equal(group.answer.value, draft);
+    assert.equal(group.checked.hidden, true);
+    assert.equal(group.reviewPanel.hidden, true);
+    assert.equal(group.reviewPanel.textContent, '');
+    assert.equal(group.feedback.textContent, '');
+    assert.equal(group.review.textContent, '表达评析');
+    assert.equal(requests.length, 1);
+  }
+});
+
+test('the expression shortcut leaves a pending review in place and does not duplicate or cancel it', async () => {
+  const pending = deferred();
+  let calls = 0, signal;
+  const page = createPage({ fetch: (_, options) => { calls++; signal = options.signal; return pending.promise; } });
+  await page.type(0, 'First sentence.');
+  const group = page.group(0);
+  group.answer.focus();
+  assert.equal(await page.key(group.answer, { ctrlKey: true, shiftKey: true }), true);
+  assert.equal(calls, 1);
+  assert.equal(group.review.disabled, true);
+  assert.equal(group.review.textContent, '评析中…');
+  assert.equal(group.card.getAttribute('aria-busy'), 'true');
+  assert.equal(await page.key(group.answer, { metaKey: true, shiftKey: true }), true);
+  assert.equal(await page.key(group.answer, { ctrlKey: true, shiftKey: true, repeat: true }), true);
+  assert.equal(calls, 1);
+  assert.equal(signal.aborted, false);
+  assert.equal(group.review.disabled, true);
+  pending.resolve(reviewed('First sentence.'));
+  await new Promise(setImmediate);
+  assert.equal(group.reviewPanel.hidden, false);
+  assert.equal(group.review.disabled, false);
+  assert.equal(group.review.textContent, '表达评析');
+  assert.equal(group.card.getAttribute('aria-busy'), 'false');
+});
+
+test('expression shortcut failures retry and late old results never overwrite the revised draft', async () => {
+  for (const fail of [false, true]) {
+    const pending = deferred();
+    let calls = 0, signal;
+    const page = createPage({ fetch: (_, options) => {
+      calls++;
+      if (calls === 1) { signal = options.signal; return pending.promise; }
+      if (calls === 2) throw new Error('offline');
+      return reviewed('New answer.');
+    } });
+    await page.type(0, 'First answer.');
+    const group = page.group(0);
+    group.answer.focus();
+    await page.key(group.answer, { ctrlKey: true, shiftKey: true });
+    await page.type(0, 'New answer.');
+    assert.equal(signal.aborted, true);
+    assert.equal(group.review.textContent, '表达评析');
+    await page.key(group.answer, { ctrlKey: true, shiftKey: true });
+    await new Promise(setImmediate);
+    assert.equal(group.answer.hidden, false);
+    assert.equal(group.answer.value, 'New answer.');
+    assert.match(group.feedback.textContent, /输入已保留/);
+    assert.equal(group.review.disabled, false);
+    assert.equal(group.review.textContent, '表达评析');
+    await page.key(group.answer, { ctrlKey: true, shiftKey: true });
+    await new Promise(setImmediate);
+    if (fail) pending.reject(new Error('late old failure'));
+    else pending.resolve(reviewed('First answer.'));
+    await new Promise(setImmediate);
+    assert.equal(group.checked.textContent, 'New answer.');
+    assert.equal(group.reviewPanel.hidden, false);
+    assert.equal(group.card.classList.contains('is-correct'), true);
+    assert.equal(group.review.textContent, '表达评析');
+    assert.equal(calls, 3);
+  }
+});
+
+test('expression shortcuts skip blank drafts and do not request non-English or overlong input', async () => {
+  let calls = 0;
+  for (const draft of ['', '  \t\n ', '纯中文。', '12345 !!!', 'a'.repeat(12001)]) {
+    const page = createPage({ fetch: async () => { calls++; return reviewed(draft); } });
+    await page.type(0, draft);
+    const group = page.group(0);
+    assert.equal(await page.key(group.answer, { ctrlKey: true, shiftKey: true }), Boolean(draft.trim()));
+    await new Promise(setImmediate);
+    assert.equal(group.answer.hidden, false);
+    assert.equal(group.checked.hidden, true);
+    assert.equal(group.reviewPanel.hidden, true);
+    assert.equal(group.review.disabled, false);
+    assert.equal(group.review.textContent, '表达评析');
+    assert.doesNotMatch(group.feedback.textContent, /对照检查/);
+  }
+  assert.equal(calls, 0);
+});
+
+test('expression shortcuts preserve native defaults during composition, repeats and other modifiers', async () => {
+  let calls = 0;
+  const page = createPage({ fetch: async () => { calls++; return reviewed('First sentence.'); } });
+  await page.type(0, 'First sentence.');
+  const group = page.group(0);
+  const invalidKeys = [
+    { ctrlKey: true, shiftKey: true, altKey: true }, { metaKey: true, shiftKey: true, altKey: true },
+    { ctrlKey: true, shiftKey: true, repeat: true }, { metaKey: true, shiftKey: true, repeat: true },
+    { ctrlKey: true, shiftKey: true, isComposing: true }, { metaKey: true, shiftKey: true, isComposing: true },
+    { ctrlKey: true, shiftKey: true, keyCode: 229 }, { metaKey: true, shiftKey: true, keyCode: 229 },
+    { ctrlKey: true, shiftKey: true, key: 'k' }, { shiftKey: true },
+  ];
+  for (const properties of invalidKeys) {
+    assert.equal(await page.key(group.answer, properties), false, JSON.stringify(properties));
+    assert.equal(group.answer.hidden, false);
+    assert.equal(group.checked.hidden, true);
+  }
+  await group.answer.emit('compositionstart');
+  assert.equal(await page.key(group.answer, { ctrlKey: true, shiftKey: true }), false);
+  await group.answer.emit('compositionend');
+  assert.equal(calls, 0);
+  await page.click(group.check);
+  for (const properties of invalidKeys) {
+    assert.equal(await page.key(group.checked, properties), false, JSON.stringify(properties));
+    assert.equal(group.checked.hidden, false);
+  }
+  assert.equal(calls, 0);
+});
+
+test('expression shortcuts are scoped to the current active attached input or checked controls', async () => {
+  let calls = 0;
+  const page = createPage({ fetch: async () => { calls++; return reviewed('First sentence.'); } });
+  await page.type(0, 'First sentence.');
+  const group = page.group(0);
+  const regions = [group.card, group.reference, group.placeholder, group.translationContent, group.feedback, group.missing, group.reviewPanel];
+  for (const target of [...regions, group.check, group.review, group.toggle]) {
+    assert.equal(await page.key(target, { ctrlKey: true, shiftKey: true }), false, target.className);
+    assert.equal(group.answer.hidden, false);
+  }
+  page.controller.setActive(false);
+  assert.equal(await page.key(group.answer, { ctrlKey: true, shiftKey: true }), false);
+  page.controller.setActive(true);
+  await page.click(group.check);
+  for (const target of regions) {
+    assert.equal(await page.key(target, { ctrlKey: true, shiftKey: true }), false, target.className);
+    assert.equal(group.checked.hidden, false);
+  }
+  assert.equal(await page.key(group.answer, { ctrlKey: true, shiftKey: true }), false);
+  page.controller.setActive(false);
+  assert.equal(await page.key(group.checked, { ctrlKey: true, shiftKey: true }), false);
+  page.controller.setActive(true);
+  page.controller.reset();
+  assert.equal(await page.key(group.checked, { ctrlKey: true, shiftKey: true }), false);
+  group.answer.value = 'Detached draft.';
+  assert.equal(await page.key(group.answer, { ctrlKey: true, shiftKey: true }), false);
+  assert.equal(page.group(0).answer.value, '');
+  assert.equal(calls, 0);
+});
+
+test('the expression return shortcut works from each checked action without issuing a new review', async () => {
+  for (const targetName of ['checked', 'check', 'edit', 'review', 'toggle', 'translationToggle']) {
+    let calls = 0;
+    const page = createPage({ fetch: async () => { calls++; return reviewed('First sentence.'); } });
+    await page.type(0, 'First sentence.');
+    const group = page.group(0);
+    await page.click(group.review);
+    group[targetName].focus();
+    assert.equal(await page.key(page.document.activeElement, { metaKey: true, shiftKey: true }), true, targetName);
+    assert.equal(page.document.activeElement, group.answer, targetName);
+    assert.equal(group.answer.hidden, false, targetName);
+    assert.equal(group.answer.value, 'First sentence.', targetName);
+    assert.equal(group.reviewPanel.hidden, true, targetName);
+    assert.equal(calls, 1, targetName);
+  }
 });

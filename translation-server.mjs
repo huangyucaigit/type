@@ -387,10 +387,10 @@ export function createServer({ translate, analyze, review, config, configured = 
         return json(response, 200, await analyze(input.text, input.context));
       }
       if (pathname === '/api/review') {
-        if (request.method !== 'POST') return json(response, 405, { error: '请通过网页发起对照检查。' });
-        if (!/^application\/json(?:\s*;|$)/i.test(request.headers['content-type'] || '')) return json(response, 415, { error: '对照检查请求格式不受支持。' });
-        const body = await readJson(request, { maxBytes: 150000, invalidMessage: '对照检查请求格式无效，请刷新页面后重试。', largeMessage: '请求过大，请减少每组句数或输入内容。' });
-        if (!body || typeof body !== 'object' || Array.isArray(body)) throw new TranslationError(400, '对照检查请求格式无效。');
+        if (request.method !== 'POST') return json(response, 405, { error: '请通过网页发起表达评析。' });
+        if (!/^application\/json(?:\s*;|$)/i.test(request.headers['content-type'] || '')) return json(response, 415, { error: '表达评析请求格式不受支持。' });
+        const body = await readJson(request, { maxBytes: 150000, invalidMessage: '表达评析请求格式无效，请刷新页面后重试。', largeMessage: '请求过大，请减少每组句数或输入内容。' });
+        if (!body || typeof body !== 'object' || Array.isArray(body)) throw new TranslationError(400, '表达评析请求格式无效。');
         const input = validateSentenceReviewInput(body.reference, body.answer);
         return json(response, 200, await review(input.reference, input.answer));
       }
