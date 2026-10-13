@@ -297,6 +297,7 @@
       const revision = item.reviewVersion;
       const snapshot = item.draft;
       const controller = new window.AbortController();
+      if (item.card.contains(document.activeElement)) item.answer.focus({ preventScroll: true });
       item.reviewController = controller;
       item.reviewPending = true;
       item.checkButton.disabled = true;
@@ -328,6 +329,7 @@
         }
         if (!isCurrent()) return;
         const result = validateReview(data?.review, answer);
+        const focusResult = item.card.contains(document.activeElement);
         const completed = result.languageStatus === "correct" && result.meaningStatus === "consistent";
         item.analysis = { completed, review: result };
         // Different but valid wording is never compared with the strict word diff.
@@ -349,6 +351,7 @@
         item.card.classList.add("is-checked");
         item.card.classList.toggle("is-correct", completed);
         refreshSummary();
+        if (focusResult) item.checkedAnswer.focus({ preventScroll: true });
       } catch (error) {
         if (!isCurrent()) return;
         item.feedback.textContent = `${error.message} 输入已保留。`;
@@ -410,6 +413,7 @@
       item.card.classList.add("is-checked");
       item.card.classList.toggle("is-correct", analysis.completed);
       refreshSummary();
+      item.checkedAnswer.focus({ preventScroll: true });
     }
 
     function buildGroup(group, index, fragments) {
@@ -490,15 +494,8 @@
       item.checkedAnswer.setAttribute("role", "region");
       item.checkedAnswer.setAttribute("aria-label", `第 ${number} 组输入检查结果`);
       item.checkedAnswer.lang = "en";
+      item.checkedAnswer.tabIndex = 0;
       item.checkedAnswer.hidden = true;
-      item.answer.addEventListener("keydown", (event) => {
-        if (event.key !== "Enter" || !(event.ctrlKey || event.metaKey) || event.altKey || event.shiftKey
-          || event.repeat || event.isComposing || event.keyCode === 229 || item.composing
-          || !active || !items.includes(item) || item.answer.hidden || !item.answer.value.trim()) return;
-        event.preventDefault();
-        item.draft = item.answer.value;
-        checkWords(item);
-      });
       item.checkedAnswer.addEventListener("dblclick", (event) => {
         if (!active || !items.includes(item) || item.checkedAnswer.hidden) return;
         event.preventDefault();
@@ -520,8 +517,31 @@
       item.checkButton.setAttribute("aria-label", `第 ${number} 组对照检查，评析英文表达`);
       const strictButton = button("逐词核对", "button button-secondary group-word-check", () => checkWords(item));
       strictButton.setAttribute("aria-label", `第 ${number} 组逐词核对，与范文严格比对`);
-      strictButton.title = "快捷键：Ctrl+Enter（Mac：⌘+Enter）";
+      const shortcutHint = "Ctrl+Enter（Mac：⌘+Enter）：核对 / 返回输入";
+      const shortcutTooltip = element("span", "sentence-shortcut-hint", shortcutHint);
+      shortcutTooltip.id = `sentenceShortcut-${number}`;
+      shortcutTooltip.setAttribute("role", "tooltip");
+      for (const action of [strictButton, item.editButton]) {
+        action.setAttribute("data-shortcut", shortcutHint);
+        action.setAttribute("aria-describedby", shortcutTooltip.id);
+      }
       actions.append(item.checkButton, strictButton, item.toggle, item.translationToggle, item.editButton);
+      actions.append(shortcutTooltip);
+      card.addEventListener("keydown", (event) => {
+        if (event.key !== "Enter" || !(event.ctrlKey || event.metaKey) || event.altKey || event.shiftKey
+          || event.repeat || event.isComposing || event.keyCode === 229 || item.composing
+          || !active || !items.includes(item)) return;
+        const editing = event.target === item.answer && !item.answer.hidden && item.answer.value.trim();
+        const checked = !item.checkedAnswer.hidden
+          && (item.checkedAnswer.contains(event.target) || actions.contains(event.target));
+        if (!editing && !checked) return;
+        event.preventDefault();
+        if (checked) edit(item);
+        else {
+          item.draft = item.answer.value;
+          checkWords(item);
+        }
+      });
       item.reviewLink = element("a", "review-service-link", "打开在线练习页");
       item.reviewLink.href = "http://127.0.0.1:4173";
       item.reviewLink.target = "_blank";

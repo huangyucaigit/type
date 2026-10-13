@@ -1678,16 +1678,33 @@ test('double-clicking editable text keeps native word selection without checking
   assert.equal(requests, 0);
 });
 
-test('Ctrl+Enter and Command+Enter both run the local check without sending model requests', async () => {
+test('Ctrl+Enter and Command+Enter toggle checking and editing through the actual focused element', async () => {
   for (const modifier of [{ ctrlKey: true }, { metaKey: true }]) {
     let requests = 0;
     const page = createPage({ source: 'Keep learning.', fetch: async () => { requests++; throw new Error('shortcut must check locally'); } });
-    await page.type(0, 'Keep learning.');
+    const draft = '  Keep\n learning.  ';
+    await page.type(0, draft);
+    await page.fire('sentenceTimerStart', 'click');
+    page.tick(2100);
     const group = page.group(0);
-    assert.equal(await page.key(group.answer, modifier), true);
+    group.answer.focus();
+    assert.equal(await page.key(page.document.activeElement, modifier), true);
     assert.equal(group.answer.hidden, true);
     assert.equal(group.checked.hidden, false);
+    assert.equal(group.checked.tabIndex, 0);
+    assert.equal(page.document.activeElement, group.checked);
     assert.equal(group.card.classList.contains('is-correct'), true);
+    assert.equal(await page.key(page.document.activeElement, modifier), true);
+    assert.equal(page.document.activeElement, group.answer);
+    assert.equal(group.answer.hidden, false);
+    assert.equal(group.answer.value, draft);
+    assert.equal(group.checked.hidden, true);
+    assert.equal(group.feedback.textContent, '');
+    assert.equal(group.card.classList.contains('is-correct'), false);
+    assert.equal(page.$('sentenceTimerValue').textContent, '00:02');
+    assert.equal(page.$('sentenceTimerState').textContent, '计时中');
+    page.tick(1900);
+    assert.equal(page.$('sentenceTimerValue').textContent, '00:04');
     assert.equal(requests, 0);
   }
 });
@@ -1720,4 +1737,141 @@ test('ordinary Enter, other modifiers and repeated or composing shortcut keys ke
     assert.equal(group.feedback.textContent, '', JSON.stringify(properties));
   }
   assert.equal(group.answer.value, 'Keep learning.');
+});
+
+test('a shortcut from checked text affects only its own group and keeps the other result intact', async () => {
+  const page = createPage();
+  await page.type(0, 'First typo.');
+  await page.type(1, 'Second sentence!');
+  const first = page.group(0), second = page.group(1);
+  await page.click(first.check);
+  await page.click(second.check);
+  const secondFeedback = second.feedback.textContent;
+  first.checked.focus();
+  assert.equal(await page.key(page.document.activeElement, { ctrlKey: true }), true);
+  assert.equal(page.document.activeElement, first.answer);
+  assert.equal(first.answer.value, 'First typo.');
+  assert.equal(first.checked.hidden, true);
+  assert.equal(second.checked.hidden, false);
+  assert.equal(second.card.classList.contains('is-correct'), true);
+  assert.equal(second.feedback.textContent, secondFeedback);
+  assert.match(page.$('sentenceProgress').textContent, /1 \/ 3/);
+});
+
+test('mouse checking focuses the result and the shortcut returns from result or action buttons', async () => {
+  for (const targetName of ['checked', 'check', 'edit', 'review', 'toggle', 'translationToggle']) {
+    let requests = 0;
+    const page = createPage({ source: 'Keep learning.', fetch: async () => { requests++; throw new Error('editing must not request a model'); } });
+    await page.type(0, 'Keep learning.');
+    const group = page.group(0);
+    group.check.focus();
+    await page.click(group.check);
+    assert.equal(page.document.activeElement, group.checked, targetName);
+    group[targetName].focus();
+    assert.equal(await page.key(page.document.activeElement, { ctrlKey: true }), true, targetName);
+    assert.equal(page.document.activeElement, group.answer, targetName);
+    assert.equal(group.answer.hidden, false, targetName);
+    assert.equal(group.answer.value, 'Keep learning.', targetName);
+    assert.equal(group.checked.hidden, true, targetName);
+    assert.equal(group.feedback.textContent, '', targetName);
+    assert.equal(requests, 0, targetName);
+  }
+});
+
+test('an AI result keeps focus in its group and returns to input by shortcut without another request', async () => {
+  let requests = 0;
+  const draft = 'English is something we study daily.';
+  const page = createPage({ source: 'We learn English every day.', fetch: async () => { requests++; return reviewed(draft); } });
+  await page.type(0, draft);
+  const group = page.group(0);
+  group.review.focus();
+  await page.click(group.review);
+  assert.equal(group.reviewPanel.hidden, false);
+  assert.equal(page.document.activeElement, group.checked);
+  assert.equal(await page.key(page.document.activeElement, { metaKey: true }), true);
+  assert.equal(page.document.activeElement, group.answer);
+  assert.equal(group.answer.value, draft);
+  assert.equal(group.reviewPanel.hidden, true);
+  assert.equal(group.reviewPanel.textContent, '');
+  assert.equal(group.checked.hidden, true);
+  assert.equal(requests, 1);
+});
+
+test('an AI result never steals focus after the learner moves to another group', async () => {
+  const pending = deferred();
+  const page = createPage({ fetch: () => pending.promise });
+  await page.type(0, 'First sentence.');
+  await page.type(1, 'Second private draft!');
+  const first = page.group(0), second = page.group(1);
+  first.review.focus();
+  const work = page.click(first.review);
+  second.answer.focus();
+  pending.resolve(reviewed('First sentence.'));
+  await work;
+  assert.equal(first.reviewPanel.hidden, false);
+  assert.equal(first.checked.hidden, false);
+  assert.equal(page.document.activeElement, second.answer);
+  assert.equal(second.answer.value, 'Second private draft!');
+  assert.equal(second.checked.hidden, true);
+});
+
+test('the toggle shortcut ignores references and other card regions in either practice state', async () => {
+  const page = createPage({ source: 'Keep learning.' });
+  await page.type(0, 'Keep learning.');
+  const group = page.group(0);
+  const actions = page.find(group.card, 'sentence-group-actions')[0];
+  const regions = [group.card, group.reference, group.placeholder, group.translationContent, group.feedback, group.missing, group.reviewPanel];
+  for (const target of [...regions, group.check, group.review, group.toggle, actions]) {
+    assert.equal(await page.key(target, { ctrlKey: true }), false, target.className);
+    assert.equal(group.answer.hidden, false, target.className);
+  }
+  await page.click(group.check);
+  for (const target of regions) {
+    assert.equal(await page.key(target, { ctrlKey: true }), false, target.className);
+    assert.equal(group.checked.hidden, false, target.className);
+  }
+  assert.equal(group.answer.value, 'Keep learning.');
+});
+
+test('returning by shortcut preserves native Enter, modifier, repeat and composition protections', async () => {
+  const page = createPage({ source: 'Keep learning.' });
+  await page.type(0, 'Keep learning.');
+  const group = page.group(0);
+  await page.click(group.check);
+  const keys = [
+    {}, { shiftKey: true }, { key: 'k', ctrlKey: true },
+    { ctrlKey: true, shiftKey: true }, { metaKey: true, shiftKey: true },
+    { ctrlKey: true, altKey: true }, { metaKey: true, altKey: true },
+    { ctrlKey: true, repeat: true }, { metaKey: true, repeat: true },
+    { ctrlKey: true, isComposing: true }, { metaKey: true, isComposing: true },
+    { ctrlKey: true, keyCode: 229 }, { metaKey: true, keyCode: 229 },
+  ];
+  for (const properties of keys) {
+    assert.equal(await page.key(group.checked, properties), false, JSON.stringify(properties));
+    assert.equal(group.checked.hidden, false, JSON.stringify(properties));
+    assert.equal(group.answer.hidden, true, JSON.stringify(properties));
+  }
+  await group.answer.emit('compositionstart');
+  assert.equal(await page.key(group.checked, { ctrlKey: true }), false);
+  await group.answer.emit('compositionend');
+  assert.equal(await page.key(group.checked, { ctrlKey: true }), true);
+  assert.equal(group.answer.hidden, false);
+});
+
+test('only local check and edit buttons advertise their available keyboard shortcuts', () => {
+  const page = createPage();
+  const group = page.group(0);
+  const tooltip = page.find(group.card, 'sentence-shortcut-hint')[0];
+  assert.equal(tooltip.getAttribute('role'), 'tooltip');
+  for (const [control, action] of [[group.check, /核对/], [group.edit, /返回输入/]]) {
+    const hint = control.getAttribute('data-shortcut');
+    assert.match(hint, /Ctrl\+Enter/);
+    assert.match(hint, /⌘\+Enter/);
+    assert.equal(control.getAttribute('aria-describedby'), tooltip.id);
+    assert.match(tooltip.textContent, /Ctrl\+Enter/);
+    assert.match(tooltip.textContent, /⌘\+Enter/);
+    assert.match(tooltip.textContent, action);
+  }
+  assert.equal(group.review.getAttribute('data-shortcut'), null);
+  assert.doesNotMatch(group.review.title || group.review.getAttribute('title') || '', /Ctrl\+Enter|⌘\+Enter/);
 });

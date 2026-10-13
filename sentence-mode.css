@@ -326,12 +326,38 @@
   white-space: pre-wrap;
 }
 .sentence-group-actions {
+  position: relative;
   display: flex;
   flex-wrap: wrap;
   align-items: center;
   justify-content: flex-start;
   gap: 9px;
   margin-top: 14px;
+}
+.sentence-shortcut-hint {
+  position: absolute;
+  z-index: 5;
+  left: 0;
+  bottom: calc(100% + 8px);
+  width: max-content;
+  max-width: min(320px, 100%);
+  padding: 8px 11px;
+  border-radius: 7px;
+  background: var(--ink);
+  color: var(--paper);
+  font-size: 11px;
+  line-height: 1.7;
+  white-space: normal;
+  text-align: left;
+  box-shadow: 0 4px 14px #24351e24;
+  pointer-events: none;
+  opacity: 0;
+  visibility: hidden;
+}
+.sentence-group-actions [data-shortcut]:hover ~ .sentence-shortcut-hint,
+.sentence-group-actions [data-shortcut]:focus-visible ~ .sentence-shortcut-hint {
+  opacity: 1;
+  visibility: visible;
 }
 .sentence-summary {
   display: flex;
