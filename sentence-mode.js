@@ -477,6 +477,8 @@
       for (const event of ["focus", "beforeinput", "compositionstart"]) {
         item.answer.addEventListener(event, () => onLearningReset());
       }
+      item.answer.addEventListener("compositionstart", () => { item.composing = true; });
+      item.answer.addEventListener("compositionend", () => { item.composing = false; });
       item.answer.addEventListener("input", () => {
         onLearningReset();
         item.draft = item.answer.value;
@@ -489,6 +491,17 @@
       item.checkedAnswer.setAttribute("aria-label", `第 ${number} 组输入检查结果`);
       item.checkedAnswer.lang = "en";
       item.checkedAnswer.hidden = true;
+      item.answer.addEventListener("dblclick", (event) => {
+        if (!active || !items.includes(item) || item.answer.hidden || item.composing || !item.answer.value.trim()) return;
+        event.preventDefault();
+        item.draft = item.answer.value;
+        checkWords(item);
+      });
+      item.checkedAnswer.addEventListener("dblclick", (event) => {
+        if (!active || !items.includes(item) || item.checkedAnswer.hidden) return;
+        event.preventDefault();
+        edit(item);
+      });
       card.append(item.inputLabel, item.answer, item.checkedAnswer);
       item.feedback = element("p", "group-feedback");
       item.feedback.id = `sentenceFeedback-${number}`;

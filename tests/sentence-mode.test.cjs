@@ -1458,3 +1458,193 @@ test('concurrent AI reviews are independent between groups', async () => {
   assert.equal(page.group(0).reviewPanel.hidden, false);
   assert.match(page.$('sentenceProgress').textContent, /2 \/ 3/);
 });
+
+test('double-clicking a draft checks only that group locally and preserves its buttons', async () => {
+  let requests = 0;
+  const page = createPage({ fetch: async () => { requests++; throw new Error('local checking must not request a model'); } });
+  await page.type(0, 'First typo.');
+  await page.type(1, 'Keep the other draft!');
+  await page.click(page.group(0).toggle);
+  await page.click(page.group(1).toggle);
+  const first = page.group(0), second = page.group(1);
+
+  await page.doubleClick(first.answer);
+
+  assert.equal(first.answer.hidden, true);
+  assert.equal(first.checked.hidden, false);
+  assert.equal(first.checked.textContent, 'First typo.');
+  assert.equal(first.reference.hidden, false);
+  assert.deepEqual(page.find(first.checked, 'word-error').map(node => node.textContent), ['typo.']);
+  assert.equal(first.edit.hidden, false);
+  assert.equal(first.check.hidden, false);
+  assert.equal(first.review.hidden, false);
+  assert.equal(first.reviewPanel.hidden, true);
+  assert.equal(second.answer.value, 'Keep the other draft!');
+  assert.equal(second.answer.hidden, false);
+  assert.equal(second.checked.hidden, true);
+  assert.equal(second.reference.hidden, true);
+  assert.equal(second.feedback.textContent, '');
+  assert.equal(requests, 0);
+});
+
+test('double-click skips empty drafts and waits until input-method composition finishes', async () => {
+  const page = createPage({ source: 'Keep learning.' });
+  const group = page.group(0);
+  await page.click(group.toggle);
+  for (const draft of ['', '  \t\n  ']) {
+    await page.type(0, draft);
+    await page.doubleClick(group.answer);
+    assert.equal(group.answer.hidden, false);
+    assert.equal(group.checked.hidden, true);
+    assert.equal(group.reference.hidden, true);
+    assert.equal(group.feedback.textContent, '');
+  }
+
+  await page.type(0, 'Keep learning.');
+  await group.answer.emit('compositionstart');
+  await page.doubleClick(group.answer);
+  assert.equal(group.answer.hidden, false);
+  assert.equal(group.checked.hidden, true);
+  assert.equal(group.reference.hidden, true);
+  await group.answer.emit('compositionend');
+  await page.doubleClick(group.answer);
+  assert.equal(group.checked.hidden, false);
+  assert.equal(group.card.classList.contains('is-correct'), true);
+});
+
+test('double-clicking a checked word restores the complete draft and leaves the manual stopwatch running', async () => {
+  const page = createPage({ source: 'We learn English every day. Another sentence.' });
+  const draft = '  We learn French\n every day.  ';
+  await page.type(0, draft);
+  await page.type(1, 'Another sentence.');
+  await page.click(page.group(1).check);
+  await page.fire('sentenceTimerStart', 'click');
+  page.tick(2300);
+  const group = page.group(0), other = page.group(1);
+  await page.doubleClick(group.answer);
+  const wrongWord = page.find(group.checked, 'word-error')[0];
+  assert.equal(wrongWord.textContent, 'French');
+
+  await page.doubleClick(wrongWord);
+
+  assert.equal(group.answer.hidden, false);
+  assert.equal(group.answer.value, draft);
+  assert.equal(page.document.activeElement, group.answer);
+  assert.equal(group.checked.hidden, true);
+  assert.equal(group.edit.hidden, true);
+  assert.equal(group.feedback.textContent, '');
+  assert.equal(group.missing.hidden, true);
+  assert.equal(group.reviewPanel.hidden, true);
+  assert.equal(group.card.classList.contains('is-checked'), false);
+  assert.equal(other.checked.hidden, false);
+  assert.equal(other.card.classList.contains('is-correct'), true);
+  assert.equal(page.$('sentenceTimerValue').textContent, '00:02');
+  assert.equal(page.$('sentenceTimerState').textContent, '计时中');
+  page.tick(1700);
+  assert.equal(page.$('sentenceTimerValue').textContent, '00:04');
+  await page.type(0, 'We learn English every day.');
+  await page.click(group.check);
+  assert.equal(group.card.classList.contains('is-correct'), true);
+});
+
+test('double-clicking a correct checked word returns to editing without resuming a paused stopwatch', async () => {
+  const page = createPage({ source: 'Keep learning.' });
+  await page.fire('sentenceTimerStart', 'click');
+  page.tick(2100);
+  await page.fire('sentenceTimerPause', 'click');
+  await page.type(0, 'Keep learning.');
+  const group = page.group(0);
+  await page.doubleClick(group.answer);
+  assert.equal(group.card.classList.contains('is-correct'), true);
+  await page.doubleClick(group.checked.children[0]);
+  assert.equal(group.answer.value, 'Keep learning.');
+  assert.equal(group.answer.hidden, false);
+  assert.equal(group.card.classList.contains('is-correct'), false);
+  assert.match(page.$('sentenceProgress').textContent, /0 \/ 1/);
+  page.tick(5000);
+  assert.equal(page.$('sentenceTimerValue').textContent, '00:02');
+  assert.equal(page.$('sentenceTimerState').textContent, '已暂停');
+});
+
+test('double-clicking an AI checked answer clears the evaluation, retains the draft and makes no new request', async () => {
+  let requests = 0;
+  const answer = 'English is something we study daily.';
+  const page = createPage({ source: 'We learn English every day.', fetch: async () => { requests++; return reviewed(answer); } });
+  const draft = '  ' + answer + '\n';
+  await page.type(0, draft);
+  const group = page.group(0);
+  await page.click(group.review);
+  assert.equal(group.reviewPanel.hidden, false);
+  assert.equal(group.card.classList.contains('is-correct'), true);
+  await page.doubleClick(group.checked.children[0]);
+  assert.equal(group.answer.hidden, false);
+  assert.equal(group.answer.value, draft);
+  assert.equal(page.document.activeElement, group.answer);
+  assert.equal(group.checked.hidden, true);
+  assert.equal(group.reviewPanel.hidden, true);
+  assert.equal(group.reviewPanel.textContent, '');
+  assert.equal(group.feedback.textContent, '');
+  assert.equal(group.state.textContent, '待检查');
+  assert.equal(group.card.classList.contains('is-correct'), false);
+  assert.equal(requests, 1);
+});
+
+test('double-clicking a draft cancels pending AI review and late success or failure cannot replace local results', async () => {
+  for (const failure of [false, true]) {
+    const pending = deferred();
+    let signal, requests = 0;
+    const page = createPage({ source: 'First sentence.', fetch: (_, options) => {
+      requests++;
+      signal = options.signal;
+      return pending.promise;
+    } });
+    await page.type(0, 'First typo.');
+    const group = page.group(0);
+    const work = page.click(group.review);
+    assert.equal(group.card.getAttribute('aria-busy'), 'true');
+    await page.doubleClick(group.answer);
+    assert.equal(signal.aborted, true);
+    assert.equal(group.checked.hidden, false);
+    assert.equal(group.review.disabled, false);
+    assert.equal(group.card.getAttribute('aria-busy'), 'false');
+    const feedback = group.feedback.textContent;
+    if (failure) pending.reject(new Error('late provider failure'));
+    else pending.resolve(reviewed('First typo.'));
+    await work;
+    assert.equal(group.checked.textContent, 'First typo.');
+    assert.equal(group.feedback.textContent, feedback);
+    assert.equal(group.reviewPanel.hidden, true);
+    assert.equal(group.card.classList.contains('is-correct'), false);
+    assert.deepEqual(page.find(group.checked, 'word-error').map(node => node.textContent), ['typo.']);
+    assert.equal(requests, 1);
+  }
+});
+
+test('double-click ignores hidden controls, inactive mode and detached groups', async () => {
+  const page = createPage();
+  await page.type(0, 'First typo.');
+  const original = page.group(0);
+  await page.doubleClick(original.checked);
+  assert.equal(original.answer.hidden, false);
+  assert.equal(original.feedback.textContent, '');
+  page.controller.setActive(false);
+  await page.doubleClick(original.answer);
+  assert.equal(original.checked.hidden, true);
+  page.controller.setActive(true);
+  await page.doubleClick(original.answer);
+  const firstWord = original.checked.children[0];
+  await page.doubleClick(original.answer);
+  assert.equal(original.checked.children[0], firstWord);
+  page.controller.setActive(false);
+  await page.doubleClick(original.checked);
+  assert.equal(original.checked.hidden, false);
+  page.controller.setActive(true);
+  page.controller.reset();
+  const replacement = page.group(0);
+  await page.doubleClick(original.checked);
+  original.answer.value = 'Detached draft.';
+  await page.doubleClick(original.answer);
+  assert.equal(replacement.answer.value, '');
+  assert.equal(replacement.checked.hidden, true);
+  assert.notEqual(page.document.activeElement, original.answer);
+});
