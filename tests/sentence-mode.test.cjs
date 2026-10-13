@@ -229,6 +229,15 @@ function createPage({ source = 'First sentence. Second sentence! Third sentence?
     fire: (id, name, properties) => $(id).emit(name, properties),
     click: node => node.emit('click'),
     doubleClick: node => node.emit('dblclick'),
+    async key(node, properties = {}) {
+      let prevented = false;
+      await node.emit('keydown', {
+        key: 'Enter', ctrlKey: false, metaKey: false, altKey: false, shiftKey: false,
+        repeat: false, isComposing: false, keyCode: 13, ...properties,
+        preventDefault() { prevented = true; },
+      });
+      return prevented;
+    },
     async select(node, start = 0, end = node.textContent.length) {
       function endpoint(position) {
         const leaves = [];
@@ -1459,7 +1468,7 @@ test('concurrent AI reviews are independent between groups', async () => {
   assert.match(page.$('sentenceProgress').textContent, /2 \/ 3/);
 });
 
-test('double-clicking a draft checks only that group locally and preserves its buttons', async () => {
+test('Ctrl+Enter checks only that group locally and preserves its buttons', async () => {
   let requests = 0;
   const page = createPage({ fetch: async () => { requests++; throw new Error('local checking must not request a model'); } });
   await page.type(0, 'First typo.');
@@ -1468,7 +1477,7 @@ test('double-clicking a draft checks only that group locally and preserves its b
   await page.click(page.group(1).toggle);
   const first = page.group(0), second = page.group(1);
 
-  await page.doubleClick(first.answer);
+  assert.equal(await page.key(first.answer, { ctrlKey: true }), true);
 
   assert.equal(first.answer.hidden, true);
   assert.equal(first.checked.hidden, false);
@@ -1487,13 +1496,13 @@ test('double-clicking a draft checks only that group locally and preserves its b
   assert.equal(requests, 0);
 });
 
-test('double-click skips empty drafts and waits until input-method composition finishes', async () => {
+test('the local-check shortcut skips empty drafts and waits until input-method composition finishes', async () => {
   const page = createPage({ source: 'Keep learning.' });
   const group = page.group(0);
   await page.click(group.toggle);
   for (const draft of ['', '  \t\n  ']) {
     await page.type(0, draft);
-    await page.doubleClick(group.answer);
+    assert.equal(await page.key(group.answer, { ctrlKey: true }), false);
     assert.equal(group.answer.hidden, false);
     assert.equal(group.checked.hidden, true);
     assert.equal(group.reference.hidden, true);
@@ -1502,12 +1511,12 @@ test('double-click skips empty drafts and waits until input-method composition f
 
   await page.type(0, 'Keep learning.');
   await group.answer.emit('compositionstart');
-  await page.doubleClick(group.answer);
+  assert.equal(await page.key(group.answer, { ctrlKey: true }), false);
   assert.equal(group.answer.hidden, false);
   assert.equal(group.checked.hidden, true);
   assert.equal(group.reference.hidden, true);
   await group.answer.emit('compositionend');
-  await page.doubleClick(group.answer);
+  assert.equal(await page.key(group.answer, { ctrlKey: true }), true);
   assert.equal(group.checked.hidden, false);
   assert.equal(group.card.classList.contains('is-correct'), true);
 });
@@ -1521,7 +1530,7 @@ test('double-clicking a checked word restores the complete draft and leaves the 
   await page.fire('sentenceTimerStart', 'click');
   page.tick(2300);
   const group = page.group(0), other = page.group(1);
-  await page.doubleClick(group.answer);
+  await page.key(group.answer, { ctrlKey: true });
   const wrongWord = page.find(group.checked, 'word-error')[0];
   assert.equal(wrongWord.textContent, 'French');
 
@@ -1554,7 +1563,7 @@ test('double-clicking a correct checked word returns to editing without resuming
   await page.fire('sentenceTimerPause', 'click');
   await page.type(0, 'Keep learning.');
   const group = page.group(0);
-  await page.doubleClick(group.answer);
+  await page.key(group.answer, { metaKey: true });
   assert.equal(group.card.classList.contains('is-correct'), true);
   await page.doubleClick(group.checked.children[0]);
   assert.equal(group.answer.value, 'Keep learning.');
@@ -1589,7 +1598,7 @@ test('double-clicking an AI checked answer clears the evaluation, retains the dr
   assert.equal(requests, 1);
 });
 
-test('double-clicking a draft cancels pending AI review and late success or failure cannot replace local results', async () => {
+test('the local-check shortcut cancels pending AI review and late success or failure cannot replace local results', async () => {
   for (const failure of [false, true]) {
     const pending = deferred();
     let signal, requests = 0;
@@ -1602,7 +1611,7 @@ test('double-clicking a draft cancels pending AI review and late success or fail
     const group = page.group(0);
     const work = page.click(group.review);
     assert.equal(group.card.getAttribute('aria-busy'), 'true');
-    await page.doubleClick(group.answer);
+    assert.equal(await page.key(group.answer, { ctrlKey: true }), true);
     assert.equal(signal.aborted, true);
     assert.equal(group.checked.hidden, false);
     assert.equal(group.review.disabled, false);
@@ -1620,7 +1629,7 @@ test('double-clicking a draft cancels pending AI review and late success or fail
   }
 });
 
-test('double-click ignores hidden controls, inactive mode and detached groups', async () => {
+test('shortcut checking and double-click editing ignore hidden controls, inactive mode and detached groups', async () => {
   const page = createPage();
   await page.type(0, 'First typo.');
   const original = page.group(0);
@@ -1628,12 +1637,12 @@ test('double-click ignores hidden controls, inactive mode and detached groups', 
   assert.equal(original.answer.hidden, false);
   assert.equal(original.feedback.textContent, '');
   page.controller.setActive(false);
-  await page.doubleClick(original.answer);
+  assert.equal(await page.key(original.answer, { ctrlKey: true }), false);
   assert.equal(original.checked.hidden, true);
   page.controller.setActive(true);
-  await page.doubleClick(original.answer);
+  assert.equal(await page.key(original.answer, { ctrlKey: true }), true);
   const firstWord = original.checked.children[0];
-  await page.doubleClick(original.answer);
+  assert.equal(await page.key(original.answer, { ctrlKey: true }), false);
   assert.equal(original.checked.children[0], firstWord);
   page.controller.setActive(false);
   await page.doubleClick(original.checked);
@@ -1643,8 +1652,72 @@ test('double-click ignores hidden controls, inactive mode and detached groups', 
   const replacement = page.group(0);
   await page.doubleClick(original.checked);
   original.answer.value = 'Detached draft.';
-  await page.doubleClick(original.answer);
+  assert.equal(await page.key(original.answer, { ctrlKey: true }), false);
   assert.equal(replacement.answer.value, '');
   assert.equal(replacement.checked.hidden, true);
   assert.notEqual(page.document.activeElement, original.answer);
+});
+
+test('double-clicking editable text keeps native word selection without checking or requesting a model', async () => {
+  let requests = 0;
+  const page = createPage({ fetch: async () => { requests++; throw new Error('double-click must remain local selection'); } });
+  await page.type(0, 'First typo.');
+  const group = page.group(0);
+  await page.click(group.toggle);
+  group.answer.setSelectionRange(6, 10);
+  let prevented = false;
+  await group.answer.emit('dblclick', { preventDefault() { prevented = true; } });
+  assert.equal(prevented, false);
+  assert.equal(group.answer.hidden, false);
+  assert.equal(group.answer.value, 'First typo.');
+  assert.equal(group.answer.selectionStart, 6);
+  assert.equal(group.answer.selectionEnd, 10);
+  assert.equal(group.checked.hidden, true);
+  assert.equal(group.reference.hidden, true);
+  assert.equal(group.feedback.textContent, '');
+  assert.equal(requests, 0);
+});
+
+test('Ctrl+Enter and Command+Enter both run the local check without sending model requests', async () => {
+  for (const modifier of [{ ctrlKey: true }, { metaKey: true }]) {
+    let requests = 0;
+    const page = createPage({ source: 'Keep learning.', fetch: async () => { requests++; throw new Error('shortcut must check locally'); } });
+    await page.type(0, 'Keep learning.');
+    const group = page.group(0);
+    assert.equal(await page.key(group.answer, modifier), true);
+    assert.equal(group.answer.hidden, true);
+    assert.equal(group.checked.hidden, false);
+    assert.equal(group.card.classList.contains('is-correct'), true);
+    assert.equal(requests, 0);
+  }
+});
+
+test('ordinary Enter, other modifiers and repeated or composing shortcut keys keep their native defaults', async () => {
+  const page = createPage({ source: 'Keep learning.' });
+  await page.type(0, 'Keep learning.');
+  const group = page.group(0);
+  const keys = [
+    {},
+    { shiftKey: true },
+    { altKey: true },
+    { key: 'k', ctrlKey: true },
+    { key: 'k', metaKey: true },
+    { ctrlKey: true, shiftKey: true },
+    { metaKey: true, shiftKey: true },
+    { ctrlKey: true, altKey: true },
+    { metaKey: true, altKey: true },
+    { ctrlKey: true, repeat: true },
+    { metaKey: true, repeat: true },
+    { ctrlKey: true, isComposing: true },
+    { metaKey: true, isComposing: true },
+    { ctrlKey: true, keyCode: 229 },
+    { metaKey: true, keyCode: 229 },
+  ];
+  for (const properties of keys) {
+    assert.equal(await page.key(group.answer, properties), false, JSON.stringify(properties));
+    assert.equal(group.answer.hidden, false, JSON.stringify(properties));
+    assert.equal(group.checked.hidden, true, JSON.stringify(properties));
+    assert.equal(group.feedback.textContent, '', JSON.stringify(properties));
+  }
+  assert.equal(group.answer.value, 'Keep learning.');
 });

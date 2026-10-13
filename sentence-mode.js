@@ -491,8 +491,10 @@
       item.checkedAnswer.setAttribute("aria-label", `第 ${number} 组输入检查结果`);
       item.checkedAnswer.lang = "en";
       item.checkedAnswer.hidden = true;
-      item.answer.addEventListener("dblclick", (event) => {
-        if (!active || !items.includes(item) || item.answer.hidden || item.composing || !item.answer.value.trim()) return;
+      item.answer.addEventListener("keydown", (event) => {
+        if (event.key !== "Enter" || !(event.ctrlKey || event.metaKey) || event.altKey || event.shiftKey
+          || event.repeat || event.isComposing || event.keyCode === 229 || item.composing
+          || !active || !items.includes(item) || item.answer.hidden || !item.answer.value.trim()) return;
         event.preventDefault();
         item.draft = item.answer.value;
         checkWords(item);
@@ -518,6 +520,7 @@
       item.checkButton.setAttribute("aria-label", `第 ${number} 组对照检查，评析英文表达`);
       const strictButton = button("逐词核对", "button button-secondary group-word-check", () => checkWords(item));
       strictButton.setAttribute("aria-label", `第 ${number} 组逐词核对，与范文严格比对`);
+      strictButton.title = "快捷键：Ctrl+Enter（Mac：⌘+Enter）";
       actions.append(item.checkButton, strictButton, item.toggle, item.translationToggle, item.editButton);
       item.reviewLink = element("a", "review-service-link", "打开在线练习页");
       item.reviewLink.href = "http://127.0.0.1:4173";
