@@ -645,6 +645,11 @@
         }));
       },
       setTimerVisible(visible) { $("sentenceTimerDisplay").hidden = !visible; refreshTimer(); },
+      setTitle(title) {
+        articleTitle = title;
+        $("sentenceArticleTitle").textContent = title;
+        $("sentenceArticleTitle").title = title;
+      },
       setSource(text, nextTitle, nextKind) {
         sourceText = normalize(text);
         articleTitle = nextTitle;

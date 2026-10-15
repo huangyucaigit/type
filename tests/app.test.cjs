@@ -21,7 +21,7 @@ function memoryStorage(initial = {}) {
 
 // Run the actual browser scripts against a small event/element harness. Layout,
 // native text selection and file pickers are verified separately in a browser.
-function createPage({ fetch, storage = memoryStorage(), storageGetter } = {}) {
+function createPage({ fetch, titleFetch, protocol = 'http:', storage = memoryStorage(), storageGetter } = {}) {
   const elements = new Map();
   const intervals = [];
   const frames = new Map();
@@ -111,22 +111,27 @@ function createPage({ fetch, storage = memoryStorage(), storageGetter } = {}) {
   const context = vm.createContext({
     document,
     TextDecoder,
-    fetch,
+    fetch: (url, options) => url === '/api/article-title'
+      ? (titleFetch ? titleFetch(url, options) : Promise.resolve({ ok: false }))
+      : fetch(url, options),
+    AbortSignal,
     performance: { now: () => now },
     requestAnimationFrame(callback) { frames.set(++nextFrame, callback); return nextFrame; },
     cancelAnimationFrame(id) { frames.delete(id); },
     setInterval(callback) { intervals.push(callback); },
   });
   context.window = context;
+  context.location = { protocol };
   Object.defineProperty(context, 'localStorage', { get: storageGetter || (() => storage) });
   context.innerHeight = 900;
   context.addEventListener = () => {};
   context.scrollBy = () => {};
-  const sentence = { created: [], sources: [], active: [], resets: [], visibility: [], refreshes: 0 };
+  const sentence = { created: [], sources: [], titles: [], active: [], resets: [], visibility: [], refreshes: 0 };
   context.SentencePractice = { create(options) {
     sentence.created.push({ source: options.source, title: options.title, kind: options.kind });
     return {
       setSource(source, title, kind) { sentence.sources.push({ source, title, kind }); },
+      setTitle(title) { sentence.titles.push(title); },
       setActive(active) { sentence.active.push(active); },
       reset(focus) { sentence.resets.push(focus); },
       setTimerVisible(visible) { sentence.visibility.push(visible); },
@@ -134,7 +139,7 @@ function createPage({ fetch, storage = memoryStorage(), storageGetter } = {}) {
       getLearningSources() { return []; },
     };
   } };
-  for (const name of ['typing-core.js', 'reference-selection.js', 'selection-translation.js', 'app.js']) {
+  for (const name of ['typing-core.js', 'article-history.js', 'reference-selection.js', 'selection-translation.js', 'app.js']) {
     vm.runInContext(fs.readFileSync(path.join(__dirname, '..', name), 'utf8'), context, { filename: name });
   }
   const $ = id => document.getElementById(id);
@@ -460,19 +465,22 @@ test('a successfully pasted article survives a new page while typing and timing 
   await page.draft(' \tFirst\tparagraph.\r\n\r\nSecond  paragraph. \r\n');
   await page.fire('importForm', 'submit');
   const text = 'First paragraph.\n\nSecond  paragraph.';
-  assert.deepEqual(JSON.parse(storage.getItem(ARTICLE_STORAGE_KEY)), {
-    version: 1, text, title: '我的英文范文',
-  });
+  const title = 'First paragraph. Second paragraph.';
+  const saved = JSON.parse(storage.getItem(ARTICLE_STORAGE_KEY));
+  assert.equal(saved.version, 1);
+  assert.equal(saved.text, text);
+  assert.equal(saved.title, title);
+  assert.equal(saved.articles.length, 1);
   assert.equal(page.$('articleStorageNotice').hidden, true);
-  assert.deepEqual(page.sentence.sources, [{ source: text, title: '我的英文范文', kind: '我的范文' }]);
+  assert.deepEqual(page.sentence.sources, [{ source: text, title, kind: '我的范文' }]);
   await page.type('First');
   await page.fire('timerStart', 'click');
   page.tick(4200);
   const restored = createPage({ storage });
   assert.equal(restored.$('sourceReadable').textContent, text);
-  assert.equal(restored.$('articleTitle').textContent, '我的英文范文');
+  assert.equal(restored.$('articleTitle').textContent, title);
   assert.equal(restored.$('articleKind').textContent, '我的范文');
-  assert.deepEqual(restored.sentence.created, [{ source: text, title: '我的英文范文', kind: '我的范文' }]);
+  assert.deepEqual(restored.sentence.created, [{ source: text, title, kind: '我的范文' }]);
   assert.equal(restored.$('typingInput').value, '');
   assert.equal(restored.$('typingInput').readOnly, false);
   assert.equal(restored.$('statusLabel').textContent, '准备开始');
@@ -497,7 +505,7 @@ test('a TXT import saves the applied preview and filename title only after confi
 });
 
 test('TXT filenames produce a trimmed nonempty title that remains restorable', async () => {
-  for (const [filename, title] of [['  My essay  .txt', 'My essay'], ['  .txt', '我的英文范文']]) {
+  for (const [filename, title] of [['  My essay  .txt', 'My essay'], ['  .txt', 'The imported article must survive.']]) {
     const storage = memoryStorage();
     const page = createPage({ storage });
     await page.open();
@@ -535,7 +543,7 @@ test('another confirmed article replaces the saved article without saving practi
   assert.equal(storage.writes.length, 2);
   const restored = createPage({ storage });
   assert.equal(restored.$('sourceReadable').textContent, 'The second essay.');
-  assert.equal(restored.$('articleTitle').textContent, '我的英文范文');
+  assert.equal(restored.$('articleTitle').textContent, 'The second essay.');
 });
 
 test('cancelled drafts, empty submissions, file previews and pending reads preserve the saved article', async () => {
@@ -638,7 +646,7 @@ test('unavailable storage and a throwing storage getter cannot prevent opening o
     assert.match(page.$('articleStorageNotice').textContent, /无法|未能|不能|失败|不会|未保存|未.*保存/);
     await page.type('Practice');
     assert.equal(page.$('statusLabel').textContent, '练习中');
-    assert.deepEqual(page.sentence.sources, [{ source: 'Practice still works.', title: '我的英文范文', kind: '我的范文' }]);
+    assert.deepEqual(page.sentence.sources, [{ source: 'Practice still works.', title: 'Practice still works.', kind: '我的范文' }]);
   }
 });
 
@@ -652,7 +660,10 @@ test('a storage read failure falls back to the sample and does not prevent a lat
   await page.fire('importForm', 'submit');
   assert.equal(page.$('sourceReadable').textContent, 'A new article can be saved.');
   assert.equal(storage.writes.length, 1);
-  assert.deepEqual(JSON.parse(storage.writes[0].value), { version: 1, text: 'A new article can be saved.', title: '我的英文范文' });
+  const record = JSON.parse(storage.writes[0].value);
+  assert.equal(record.text, 'A new article can be saved.');
+  assert.equal(record.title, 'A new article can be saved.');
+  assert.equal(record.articles.length, 1);
   assert.equal(page.$('articleStorageNotice').hidden, true);
 });
 
@@ -686,4 +697,118 @@ test('separate browser storage starts independently while explicitly shared stor
   await first.fire('importForm', 'submit');
   assert.match(createPage().$('sourceReadable').textContent, /^Learning a language/);
   assert.equal(createPage({ storage: first.storage }).$('sourceReadable').textContent, 'Only saved in the first browser.');
+});
+
+const settleTitles = () => new Promise(resolve => setImmediate(resolve));
+async function importArticle(page, text) {
+  await page.open();
+  await page.draft(text);
+  await page.fire('importForm', 'submit');
+}
+
+test('recent articles load into both modes, reset practice, and rename/delete without disturbing active practice', async () => {
+  const page = createPage();
+  await importArticle(page, 'First essay.');
+  await importArticle(page, 'Second essay.');
+  await settleTitles();
+  await page.type('Second');
+  await page.fire('timerStart', 'click');
+  page.tick(2000);
+  await page.fire('historyButton', 'click');
+  assert.equal(page.$('historyCount').textContent, '2 / 10 篇');
+  let firstCard = page.$('historyList').children[1];
+  await firstCard.children[0].emit('click');
+  assert.equal(page.$('historyDialog').open, false);
+  assert.equal(page.$('sourceReadable').textContent, 'First essay.');
+  assert.equal(page.$('typingInput').value, '');
+  assert.equal(page.$('timerValue').textContent, '00:00');
+  assert.equal(page.sentence.sources.at(-1).source, 'First essay.');
+  assert.equal(createPage({ storage: page.storage }).$('sourceReadable').textContent, 'First essay.');
+  await page.type('First');
+  await page.fire('historyButton', 'click');
+  firstCard = page.$('historyList').children[1];
+  await firstCard.children[3].children[0].emit('click');
+  const editForm = firstCard.children[4];
+  editForm.children[0].value = '  ';
+  await editForm.emit('submit');
+  assert.match(firstCard.children[5].textContent, /填写标题/);
+  editForm.children[0].value = '我的第一篇';
+  await editForm.emit('submit');
+  assert.equal(page.$('articleTitle').textContent, '我的第一篇');
+  assert.equal(page.sentence.titles.at(-1), '我的第一篇');
+  assert.equal(page.$('typingInput').value, 'First');
+  firstCard = page.$('historyList').children[1];
+  await firstCard.children[3].children[1].emit('click');
+  assert.equal(page.$('historyCount').textContent, '1 / 10 篇');
+  assert.equal(page.$('sourceReadable').textContent, 'First essay.');
+  assert.equal(page.$('typingInput').value, 'First');
+  assert.equal(createPage({ storage: page.storage }).$('sourceReadable').textContent, 'Second essay.');
+});
+
+test('background AI naming never blocks practice or resets typed text and is reused after reimport', async () => {
+  let resolveTitle, calls = 0;
+  const pending = new Promise(resolve => { resolveTitle = resolve; });
+  const page = createPage({ titleFetch: () => { calls++; return pending; } });
+  await importArticle(page, 'Daily practice improves language skills.');
+  assert.equal(page.$('importDialog').open, false);
+  await page.type('Daily');
+  await page.fire('timerStart', 'click');
+  page.tick(3000);
+  resolveTitle({ ok: true, json: async () => ({ title: '每天练习的价值' }) });
+  await settleTitles();
+  assert.equal(page.$('articleTitle').textContent, '每天练习的价值');
+  assert.equal(page.$('typingInput').value, 'Daily');
+  assert.equal(page.$('timerValue').textContent, '00:03');
+  assert.equal(page.sentence.sources.length, 1, 'renaming must not reset sentence practice');
+  assert.equal(page.sentence.titles.at(-1), '每天练习的价值');
+  await importArticle(page, '  Daily practice improves language skills.  ');
+  assert.equal(calls, 1);
+  assert.equal(page.$('articleTitle').textContent, '每天练习的价值');
+  assert.equal(JSON.parse(page.storage.getItem(ARTICLE_STORAGE_KEY)).articles.length, 1);
+});
+
+test('manual rename drafts survive an AI response, manual saves win, and deleted articles stay deleted', async () => {
+  for (const action of ['rename', 'delete']) {
+    let resolveTitle;
+    const page = createPage({ titleFetch: () => new Promise(resolve => { resolveTitle = resolve; }) });
+    await importArticle(page, 'An essay awaiting a title.');
+    await page.fire('historyButton', 'click');
+    const card = page.$('historyList').children[0];
+    if (action === 'rename') {
+      await card.children[3].children[0].emit('click');
+      card.children[4].children[0].value = '尚未提交的手动标题';
+      resolveTitle({ ok: true, json: async () => ({ title: 'AI 自动标题' }) });
+      await settleTitles();
+      assert.equal(card.children[4].children[0].value, '尚未提交的手动标题');
+      assert.equal(page.$('historyList').children[0], card, 'AI must not rebuild an active rename editor');
+      await card.children[4].emit('submit');
+      assert.equal(page.$('articleTitle').textContent, '尚未提交的手动标题');
+    } else {
+      await card.children[3].children[1].emit('click');
+      resolveTitle({ ok: true, json: async () => ({ title: '迟到标题' }) });
+      await settleTitles();
+      assert.equal(page.$('historyEmpty').hidden, false);
+      assert.equal(JSON.parse(page.storage.getItem(ARTICLE_STORAGE_KEY)).articles.length, 0);
+    }
+  }
+});
+
+test('failed AI names offer a retry, and file mode keeps history usable without making an AI call', async () => {
+  let calls = 0;
+  const page = createPage({ titleFetch: async () => (++calls === 1
+    ? { ok: false } : { ok: true, json: async () => ({ title: '重试成功的标题' }) }) });
+  await importArticle(page, 'A retryable article.');
+  await settleTitles();
+  await page.fire('historyButton', 'click');
+  const card = page.$('historyList').children[0];
+  assert.match(card.children[5].textContent, /可重试/);
+  await card.children[3].children[2].emit('click');
+  await settleTitles();
+  assert.equal(page.$('articleTitle').textContent, '重试成功的标题');
+  assert.equal(calls, 2);
+  const local = createPage({ protocol: 'file:', titleFetch: () => { throw new Error('must not call'); } });
+  await importArticle(local, 'A local article.');
+  await local.fire('historyButton', 'click');
+  assert.match(local.$('historyList').children[0].children[5].textContent, /本地文件/);
+  assert.equal(local.$('historyCount').textContent, '1 / 10 篇');
 });

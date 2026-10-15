@@ -191,7 +191,7 @@ function createPage({ source = 'First sentence. Second sentence! Third sentence?
       'selectionTranslationStatus', 'selectionTranslationRetry', 'selectionTranslationClose',
     ].map($));
   }
-  const scripts = ['typing-core.js', 'sentence-core.js', 'sentence-mode.js'];
+  const scripts = ['typing-core.js', 'article-history.js', 'sentence-core.js', 'sentence-mode.js'];
   if (integrated) scripts.push('reference-selection.js', 'selection-translation.js', 'app.js');
   scripts.forEach(name => vm.runInContext(fs.readFileSync(path.join(__dirname, '..', name), 'utf8'), context, { filename: name }));
   const controller = integrated ? null : context.SentencePractice.create({ source, title: 'My essay', kind: '我的范文', onLearningReset });

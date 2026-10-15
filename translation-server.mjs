@@ -7,6 +7,7 @@ import { isIP } from 'node:net';
 import { ANALYSIS_SYSTEM_PROMPT, analysisUserPrompt } from './analysis-prompts.mjs';
 import { createFeedbackStore, FeedbackError } from './feedback-store.mjs';
 import { createSentenceReviewer, validateSentenceReviewInput, SentenceReviewError } from './sentence-review.mjs';
+import { createArticleTitler, validateTitleInput, ArticleTitleError } from './article-title.mjs';
 
 const ROOT = path.dirname(fileURLToPath(import.meta.url));
 export const PORT = 4173;
@@ -20,7 +21,7 @@ const ASSETS = new Map([
   ['/robots.txt', ['robots.txt', 'text/plain; charset=utf-8']],
   ['/sitemap.xml', ['sitemap.xml', 'application/xml; charset=utf-8']],
   ...['styles.css', 'sentence-mode.css', 'about.css', 'feedback.css'].map(name => [`/${name}`, [name, 'text/css; charset=utf-8']]),
-  ...['app.js', 'typing-core.js', 'sentence-core.js', 'sentence-mode.js', 'reference-selection.js', 'selection-translation.js', 'feedback.js'].map(name => [`/${name}`, [name, 'text/javascript; charset=utf-8']]),
+  ...['app.js', 'article-history.js', 'typing-core.js', 'sentence-core.js', 'sentence-mode.js', 'reference-selection.js', 'selection-translation.js', 'feedback.js'].map(name => [`/${name}`, [name, 'text/javascript; charset=utf-8']]),
 ]);
 
 export class TranslationError extends Error {
@@ -325,7 +326,7 @@ function feedbackCookie(request) {
   return value ? value.trim().slice('mars_feedback='.length) : '';
 }
 
-export function createServer({ translate, analyze, review, config, configured = true, publicOrigins = [], feedbackStore, trustProxy = false, feedbackRateLimiter } = {}) {
+export function createServer({ translate, analyze, review, titleArticle, config, configured = true, publicOrigins = [], feedbackStore, trustProxy = false, feedbackRateLimiter } = {}) {
   publicOrigins = publicOrigins.map(normalizePublicOrigin);
   feedbackStore ||= createFeedbackStore({ filePath: path.join(process.env.ZIJIAN_FEEDBACK_DATA_DIR || path.join(ROOT, '.data'), 'feedback.json') });
   feedbackRateLimiter ||= createFeedbackRateLimiter();
@@ -333,6 +334,7 @@ export function createServer({ translate, analyze, review, config, configured = 
   translate ||= createTranslator({ ...(config ? { config } : {}), limiter });
   analyze ||= createAnalyzer({ ...(config ? { config } : {}), limiter });
   review ||= createSentenceReviewer({ config: config || readConfig(), limiter });
+  titleArticle ||= createArticleTitler({ config: config || readConfig(), limiter });
   return http.createServer(async (request, response) => {
     response.setHeader('X-Content-Type-Options', 'nosniff');
     response.setHeader('Referrer-Policy', 'no-referrer');
@@ -386,6 +388,13 @@ export function createServer({ translate, analyze, review, config, configured = 
         const input = validateAnalysisInput(body.text, body.context);
         return json(response, 200, await analyze(input.text, input.context));
       }
+      if (pathname === '/api/article-title') {
+        if (request.method !== 'POST') return json(response, 405, { error: '请通过网页发起范文起名。' });
+        if (!/^application\/json(?:\s*;|$)/i.test(request.headers['content-type'] || '')) return json(response, 415, { error: '起名请求格式不受支持。' });
+        const body = await readJson(request);
+        if (!body || typeof body !== 'object' || Array.isArray(body)) throw new ArticleTitleError(400, '起名请求格式无效。');
+        return json(response, 200, await titleArticle(validateTitleInput(body.text)));
+      }
       if (pathname === '/api/review') {
         if (request.method !== 'POST') return json(response, 405, { error: '请通过网页发起表达评析。' });
         if (!/^application\/json(?:\s*;|$)/i.test(request.headers['content-type'] || '')) return json(response, 415, { error: '表达评析请求格式不受支持。' });
@@ -401,7 +410,7 @@ export function createServer({ translate, analyze, review, config, configured = 
       response.end(request.method === 'HEAD' ? undefined : content);
     } catch (error) {
       if (response.destroyed) return;
-      const safeError = error instanceof TranslationError || error instanceof FeedbackError || error instanceof SentenceReviewError ? error : new TranslationError(500, '本机服务暂时出错，请稍后重试。');
+      const safeError = error instanceof TranslationError || error instanceof FeedbackError || error instanceof SentenceReviewError || error instanceof ArticleTitleError ? error : new TranslationError(500, '本机服务暂时出错，请稍后重试。');
       const details = { error: safeError.message };
       if (safeError instanceof FeedbackError && safeError.status === 429) {
         details.code = safeError.code === 'RATE_LIMIT' ? 'RATE_LIMIT' : 'DAILY_LIMIT';

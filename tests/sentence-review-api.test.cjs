@@ -105,7 +105,7 @@ test('review module stays private and deployment applies the existing API rate l
     for (const url of ['/sentence-review.mjs', '/.env', '/.data/feedback.json']) assert.equal((await request(url, { method: 'GET', body: '' })).status, 404);
   });
   const nginx = fs.readFileSync(path.join(__dirname, '../deploy/nginx.conf'), 'utf8');
-  assert.match(nginx, /location ~ \^\/api\/\(translate\|analyze\|review\)\$\s*\{\s*limit_req zone=api_per_ip/);
+  assert.match(nginx, /location ~ \^\/api\/\(translate\|analyze\|review\|article-title\)\$\s*\{\s*limit_req zone=api_per_ip/);
 });
 
 test('server defaults share three provider slots across review, translation and selection learning', async () => {
