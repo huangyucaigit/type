@@ -81,37 +81,21 @@
 
 ## 验证
 
-运行 `node --test tests/*.test.cjs`。网络测试使用模拟响应，不消耗接口额度；真实翻译通过页面按钮按需验证。
+```powershell
+node --test tests/*.test.cjs
+python -m unittest discover -s tests -p test_deploy_release.py -v
+```
+
+第一条验证页面与服务行为，网络测试使用模拟响应，不消耗接口额度；真实翻译通过页面按钮按需验证。第二条验证部署、备份与回退，仅使用临时目录及模拟命令，不连接服务器、不启动容器、不调用支付或模型服务。发布前后检查见 [部署与恢复](docs/OPERATIONS.md)。
 
 ## 服务器部署与增量更新
 
-使用固定 Node.js 基础镜像，通过目录绑定（bind mount，将服务器源码目录映射到容器）运行，更新源码无需重新构建应用镜像。Nginx 负责接收 80 和 443 端口访问，应用的 4173 端口仅供容器内部使用。
-
-- 服务器：`47.106.182.159`；域名：`type.where.work`，需将域名的 A 记录指向服务器 IP。
-- `/opt/zijian/src/`：网页、样式、脚本和服务源码，只读挂载到应用的 `/app`。
-- `/opt/zijian/config/app.env`：仅保存 DeepSeek 配置，文件权限为 `600`，通过 Compose 注入；不会放入源码目录。
-- `/opt/zijian/tls/`：传输层安全证书（TLS，用于加密网站访问），只读挂载给 Nginx，目录权限 `700`、私钥权限 `600`；本机对应 `tls/type.where.work.pem` 和 `tls/type.where.work.key`，该目录已排除版本管理。
-- `/opt/zijian/compose.yaml`、`/opt/zijian/nginx.conf`：容器和网站入口配置，对应本项目 `deploy/` 下的文件。
-
-在本机 PowerShell 执行首次部署或更新：
+发布命令在项目根目录的 PowerShell 中执行：
 
 ```powershell
 .\deploy\Deploy.ps1
 ```
 
-脚本比较文件内容摘要（SHA-256，用于判断文件是否变化的校验值），仅上传新增或变化的文件。前端文件更新后刷新网页即可；服务源码或部署配置变化时，脚本重建容器以加载新内容。初次部署时只从本机 `.env` 提取 DeepSeek 所需配置，不上传其他配置；后续部署默认保留服务器密钥。明确需要更新密钥时执行：
+服务器目录、参数、共享入口保护、发布前备份、失败回退、手动恢复和检查清单统一维护在 [部署与恢复](docs/OPERATIONS.md)。调整部署流程时同步更新该文档及部署测试，避免维护两套操作说明。
 
-```powershell
-.\deploy\Deploy.ps1 -UpdateSecrets
-```
-
-加密访问地址为 `https://type.where.work`。访问 `http://type.where.work` 时自动返回 308 永久重定向到 HTTPS，保留路径、查询参数、请求方法和请求体；`http://47.106.182.159` 与服务器本机 HTTP 自检继续直接访问。证书覆盖域名，不覆盖公网 IP，因此使用 IP 进行 HTTPS 访问不能通过证书域名校验。部署脚本校验证书有效期、域名、证书链及私钥匹配，并在启动前验证 Nginx 配置；证书变更后执行同一个部署命令即可更新，无需传输其他未变更文件。续期需要替换本机证书及私钥后再次部署；当前没有配置自动续期。云端安全组需要允许入方向的 TCP 80 和 443 端口。
-
-服务通过 `ZIJIAN_HOST=0.0.0.0` 在容器内接受连接，通过 `ZIJIAN_PUBLIC_ORIGINS` 指定完整访问地址，以英文逗号分隔；本机启动默认继续监听 `127.0.0.1`。域名、协议或访问端口变更时，要同步修改 Compose 的允许地址和 Nginx 入口配置。访问域名（Host）必须在允许名单内，有请求来源（Origin）的请求还必须与当前访问地址一致。
-
-入口对翻译与分析请求按客户端 IP 限速，每分钟 10 次，允许短时突发 5 次；现有服务仍限制最多 3 个并发上游请求。这是公开网站，知道网址的用户可使用所配置账户的翻译额度；如需仅供指定人员使用，应另加登录控制。
-# 支付接入演示
-
-已增加 `/payments/` 入口，由同一 Docker 网络中的 `wechat-pay-demo` 伴随服务提供，支持模拟支付及真实微信 1 分测试。`/business/type-demo-live` 与 `/business/type-demo-sandbox` 接收 HMAC 签名付款通知，账本持久去重，不发放会员权益。
-
-Nginx 配置同步在 `deploy/nginx.conf`；需保留支付容器网络别名、pay 域名证书及 ACME challenge 服务。详细部署及凭据位置见相邻 wechat-pay-service 仓库的 `docs/DEPLOYMENT.md`。既有翻译配置、反馈数据及 type 域名证书管理不变。
+`pay.where.work` 的支付业务由另一个仓库维护。本项目保留 Nginx（网站请求入口）中的支付域名、演示入口和回调转发，负责验证路由可达；支付服务、支付数据、支付域名证书及其续期由支付项目管理。后续练习网站的支付功能尚未接入，不能将现有路由视为已经完成支付业务。

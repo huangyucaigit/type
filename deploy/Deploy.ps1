@@ -1,7 +1,8 @@
 param(
     [string]$Server = '47.106.182.159',
     [string]$IdentityFile = "$env:USERPROFILE\.ssh\codex_linux",
-    [switch]$UpdateSecrets
+    [switch]$UpdateSecrets,
+    [switch]$UpdateProxyRoutes
 )
 
 $ErrorActionPreference = 'Stop'
@@ -10,12 +11,12 @@ $projectRoot = Split-Path -Parent $PSScriptRoot
 $sshOptions = @('-i', $IdentityFile, '-o', 'BatchMode=yes', '-o', 'ConnectTimeout=15', '-o', 'StrictHostKeyChecking=yes')
 $target = "root@$Server"
 
-function Invoke-RemotePython([string]$Code) {
-    $result = $Code | & ssh @sshOptions $target "tr -d '\r' | python3 -"
-    if ($LASTEXITCODE -ne 0) { throw 'Remote inspection failed.' }
+function Invoke-ReleaseTool([string]$Arguments) {
+    $helper = Get-Content -LiteralPath (Join-Path $PSScriptRoot 'remote_release.py') -Raw
+    $result = $helper | & ssh @sshOptions $target "tr -d '\r' | python3 - $Arguments"
+    if ($LASTEXITCODE -ne 0) { throw 'Remote release operation failed; inspect the private .releases record on the server.' }
     return $result
 }
-
 $items = @()
 foreach ($file in Get-ChildItem -LiteralPath $projectRoot -File) {
     if ($file.Extension -notin @('.html', '.css', '.js', '.mjs') -and $file.Name -notin @('robots.txt', 'sitemap.xml')) { continue }
@@ -53,33 +54,32 @@ console.log('TLS certificate, domain, validity and private key verified; private
 if ($LASTEXITCODE -ne 0) { throw 'TLS certificate validation failed.' }
 $manifest = ConvertTo-Json -Compress -InputObject @($items | ForEach-Object { $_.Target })
 $manifestBase64 = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($manifest))
-$inspect = @"
-import base64, hashlib, json
-from pathlib import Path
-root = Path('/opt/zijian')
-root.mkdir(parents=True, exist_ok=True)
-incoming = root / '.incoming'
-incoming.mkdir(mode=0o700, exist_ok=True)
-incoming.chmod(0o700)
-paths = json.loads(base64.b64decode('$manifestBase64'))
-hashes = {}
-for name in paths:
-    p = root / name
-    if p.is_file():
-        hashes[name] = hashlib.sha256(p.read_bytes()).hexdigest()
-print(json.dumps({'hashes': hashes, 'hasConfig': (root / 'config/app.env').is_file()}))
-"@
-$state = (Invoke-RemotePython $inspect) | ConvertFrom-Json
+$state = (Invoke-ReleaseTool "inspect --paths-base64 $manifestBase64") | ConvertFrom-Json
+$proxyBytes = [IO.File]::ReadAllBytes((Join-Path $PSScriptRoot 'nginx.conf'))
+$normalizedProxyBytes = [Text.Encoding]::UTF8.GetBytes([Text.Encoding]::UTF8.GetString($proxyBytes).Replace("`r`n", "`n"))
+$hashAlgorithm = [Security.Cryptography.SHA256]::Create()
+try { $proxyNormalizedHash = ([BitConverter]::ToString($hashAlgorithm.ComputeHash($normalizedProxyBytes))).Replace('-', '').ToLowerInvariant() }
+finally { $hashAlgorithm.Dispose() }
 $changed = @($items | Where-Object {
     $property = $state.hashes.PSObject.Properties[$_.Target]
-    -not $property -or $property.Value -ne $_.Hash
+    if ($_.Target -eq 'nginx.conf' -and $state.proxyNormalizedHash -eq $proxyNormalizedHash) { $false }
+    else { -not $property -or $property.Value -ne $_.Hash }
 })
 $writeSecrets = $UpdateSecrets -or -not $state.hasConfig
 $recreate = $writeSecrets -or @($changed | Where-Object { $_.Target -match '\.mjs$|^compose\.yaml$|^nginx\.conf$|^tls/' }).Count -gt 0
-$deploymentId = [Guid]::NewGuid().ToString('N')
+$deploymentId = 'release-' + [DateTime]::UtcNow.ToString('yyyyMMddTHHmmssZ') + '-' + [Guid]::NewGuid().ToString('N').Substring(0, 8)
+$commit = (& git -C $projectRoot rev-parse HEAD | Out-String).Trim()
+if ($LASTEXITCODE -ne 0 -or $commit -notmatch '^[a-f0-9]{40,64}$') { throw 'Cannot identify the deployment Git commit.' }
+$worktreeChanges = (& git -C $projectRoot status --porcelain | Out-String).Trim()
+if ($LASTEXITCODE -ne 0) { throw 'Cannot inspect local Git state.' }
+if ($worktreeChanges) { $commit += '-dirty' }
 $stagingRoot = Join-Path $projectRoot '.deploy'
 $stage = Join-Path $stagingRoot "stage-$deploymentId"
 $archive = Join-Path $stagingRoot "upload-$deploymentId.tar"
+if ((Test-Path -LiteralPath $stagingRoot) -and ((Get-Item -LiteralPath $stagingRoot).Attributes -band [IO.FileAttributes]::ReparsePoint)) {
+    throw 'The local deployment staging directory must not be a symbolic link or junction.'
+}
+if ((Test-Path -LiteralPath $stage) -or (Test-Path -LiteralPath $archive)) { throw 'Deployment staging identifier already exists.' }
 
 try {
     New-Item -ItemType Directory -Force -Path $stage | Out-Null
@@ -107,46 +107,24 @@ console.log(config.key ? 'DeepSeek configuration prepared; credential hidden.' :
         & node --input-type=module -e $secretScript $projectRoot $secretFile
         if ($LASTEXITCODE -ne 0) { throw 'Could not prepare application configuration.' }
     }
-    if ($changed.Count -gt 0 -or $writeSecrets) {
-        & tar -cf $archive -C $stage .
-        if ($LASTEXITCODE -ne 0) { throw 'Could not create deployment archive.' }
-        & scp @sshOptions $archive "${target}:/opt/zijian/.incoming/upload-$deploymentId.tar"
-        if ($LASTEXITCODE -ne 0) { throw 'Could not upload deployment archive.' }
-    } else {
-        Write-Host 'No changed files to upload.'
+    $uploadFiles = @($changed | ForEach-Object { [pscustomobject]@{ path = $_.Target; sha256 = $_.Hash } })
+    if ($writeSecrets) {
+        $uploadFiles += [pscustomobject]@{ path = 'config/app.env'; sha256 = (Get-FileHash -LiteralPath $secretFile -Algorithm SHA256).Hash.ToLowerInvariant() }
     }
-    $recreateFlag = if ($recreate) { '--force-recreate' } else { '' }
-    $apply = @"
-set -euo pipefail
-cd /opt/zijian
-umask 077
-mkdir -p config tls data
-chmod 700 config tls
-chown 1000:1000 data
-chmod 700 data
-if [ -f .incoming/upload-$deploymentId.tar ]; then
-  chmod 600 .incoming/upload-$deploymentId.tar
-  tar -xf .incoming/upload-$deploymentId.tar
-  rm -f .incoming/upload-$deploymentId.tar
-fi
-chmod 755 src
-find src -maxdepth 1 -type f -exec chmod 644 {} +
-chmod 700 config tls
-chmod 600 config/app.env
-chmod 600 tls/type.where.work.key
-chmod 644 tls/type.where.work.pem
-docker compose config --quiet
-docker compose run --rm --no-deps -T web nginx -t </dev/null
-docker compose up -d $recreateFlag --wait --wait-timeout 180
-docker compose exec -T web nginx -t </dev/null
-curl -fsS http://127.0.0.1/api/status
-printf '\n'
-curl --noproxy '*' --resolve type.where.work:443:127.0.0.1 -fsS https://type.where.work/api/status
-printf '\n'
-docker compose ps
-"@
-    $apply | & ssh @sshOptions $target "tr -d '\r' | bash -s"
-    if ($LASTEXITCODE -ne 0) { throw 'Deployment did not pass service checks.' }
+    $uploadManifest = [ordered]@{ version = 1; files = $uploadFiles; baseline = $state.hashes }
+    $manifestFile = Join-Path $stage 'manifest.json'
+    [IO.File]::WriteAllText($manifestFile, (ConvertTo-Json -Depth 8 -InputObject $uploadManifest), (New-Object Text.UTF8Encoding($false)))
+    & tar -cf $archive -C $stage .
+    if ($LASTEXITCODE -ne 0) { throw 'Could not create deployment archive.' }
+    & scp @sshOptions $archive "${target}:/opt/zijian/.incoming/upload-$deploymentId.tar"
+    if ($LASTEXITCODE -ne 0) { throw 'Could not upload deployment archive.' }
+    $arguments = "apply --release-id $deploymentId --commit $commit --upload /opt/zijian/.incoming/upload-$deploymentId.tar"
+    if ($recreate) { $arguments += ' --recreate' }
+    if ($UpdateProxyRoutes) { $arguments += ' --allow-proxy-update' }
+    Write-Host "Release: $deploymentId; Git: $commit"
+    $result = (Invoke-ReleaseTool $arguments) | ConvertFrom-Json
+    Write-Host "Release status: $($result.status); rollback snapshot: $($result.backupId)"
+    if (-not $result.hasPreviousRelease) { Write-Warning 'This deployment had no complete previous release; its snapshot cannot restore a running prior version.' }
 } finally {
     if (Test-Path -LiteralPath $archive) { Remove-Item -LiteralPath $archive -Force }
     if (Test-Path -LiteralPath $stage) {
