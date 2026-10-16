@@ -101,8 +101,15 @@ try { process.loadEnvFile(path.join(root, '.env')); }
 catch (error) { if (error.code !== 'ENOENT') throw new Error('Cannot load local environment file.'); }
 const { readConfig } = await import(pathToFileURL(path.join(root, 'translation-server.mjs')));
 const config = readConfig();
-fs.writeFileSync(process.argv[2], `DEEPSEEK_API_KEY=${JSON.stringify(config.key)}\nDEEPSEEK_API_URL=${JSON.stringify(config.endpoint)}\n`, { mode: 0o600 });
-console.log(config.key ? 'DeepSeek configuration prepared; credential hidden.' : 'No DeepSeek credential configured; practice remains available.');
+const lines = [`DEEPSEEK_API_KEY=${JSON.stringify(config.key)}`, `DEEPSEEK_API_URL=${JSON.stringify(config.endpoint)}`];
+const authKeys = ['ALIYUN_ACCESS_KEY_ID', 'ALIYUN_ACCESS_KEY_SECRET', 'ALIYUN_SMS_REGION_ID', 'ALIYUN_SMS_SIGN_NAME', 'ALIYUN_SMS_LOGIN_TEMPLATE_CODE', 'ALIYUN_SMS_REGISTER_TEMPLATE_CODE', 'AWS_ACCESS_KEY_ID', 'AWS_SECRET_ACCESS_KEY', 'AWS_REGION', 'SES_FROM_EMAIL'];
+for (const key of authKeys) {
+    const value = process.env[key] || '';
+    if (/[\r\n\0]/.test(value)) throw new Error('Private configuration contains unsupported characters.');
+    lines.push(`${key}=${JSON.stringify(value)}`);
+}
+fs.writeFileSync(process.argv[2], `${lines.join('\n')}\n`, { mode: 0o600 });
+console.log('Application configuration prepared; credentials hidden.');
 '@
         & node --input-type=module -e $secretScript $projectRoot $secretFile
         if ($LASTEXITCODE -ne 0) { throw 'Could not prepare application configuration.' }

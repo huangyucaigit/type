@@ -8,6 +8,8 @@ import { ANALYSIS_SYSTEM_PROMPT, analysisUserPrompt } from './analysis-prompts.m
 import { createFeedbackStore, FeedbackError } from './feedback-store.mjs';
 import { createSentenceReviewer, validateSentenceReviewInput, SentenceReviewError } from './sentence-review.mjs';
 import { createArticleTitler, validateTitleInput, ArticleTitleError } from './article-title.mjs';
+import { createAuthService, AuthError } from './auth-service.mjs';
+import { createAuthProviders } from './auth-providers.mjs';
 
 const ROOT = path.dirname(fileURLToPath(import.meta.url));
 export const PORT = 4173;
@@ -20,8 +22,8 @@ const ASSETS = new Map([
   ['/feedback.html', ['feedback.html', 'text/html; charset=utf-8']],
   ['/robots.txt', ['robots.txt', 'text/plain; charset=utf-8']],
   ['/sitemap.xml', ['sitemap.xml', 'application/xml; charset=utf-8']],
-  ...['styles.css', 'sentence-mode.css', 'about.css', 'feedback.css'].map(name => [`/${name}`, [name, 'text/css; charset=utf-8']]),
-  ...['app.js', 'article-history.js', 'typing-core.js', 'sentence-core.js', 'sentence-mode.js', 'reference-selection.js', 'selection-translation.js', 'feedback.js'].map(name => [`/${name}`, [name, 'text/javascript; charset=utf-8']]),
+  ...['styles.css', 'sentence-mode.css', 'about.css', 'feedback.css', 'auth.css', 'starter-wheel.css', 'share-card.css'].map(name => [`/${name}`, [name, 'text/css; charset=utf-8']]),
+  ...['app.js', 'article-history.js', 'typing-core.js', 'sentence-core.js', 'sentence-mode.js', 'reference-selection.js', 'selection-translation.js', 'feedback.js', 'auth.js', 'starter-wheel.js', 'qr-code.js', 'share-card.js'].map(name => [`/${name}`, [name, 'text/javascript; charset=utf-8']]),
 ]);
 
 export class TranslationError extends Error {
@@ -326,7 +328,7 @@ function feedbackCookie(request) {
   return value ? value.trim().slice('mars_feedback='.length) : '';
 }
 
-export function createServer({ translate, analyze, review, titleArticle, config, configured = true, publicOrigins = [], feedbackStore, trustProxy = false, feedbackRateLimiter } = {}) {
+export function createServer({ translate, analyze, review, titleArticle, config, configured = true, publicOrigins = [], feedbackStore, trustProxy = false, feedbackRateLimiter, authService, authProviders, authFilename } = {}) {
   publicOrigins = publicOrigins.map(normalizePublicOrigin);
   feedbackStore ||= createFeedbackStore({ filePath: path.join(process.env.ZIJIAN_FEEDBACK_DATA_DIR || path.join(ROOT, '.data'), 'feedback.json') });
   feedbackRateLimiter ||= createFeedbackRateLimiter();
@@ -335,7 +337,12 @@ export function createServer({ translate, analyze, review, titleArticle, config,
   analyze ||= createAnalyzer({ ...(config ? { config } : {}), limiter });
   review ||= createSentenceReviewer({ config: config || readConfig(), limiter });
   titleArticle ||= createArticleTitler({ config: config || readConfig(), limiter });
-  return http.createServer(async (request, response) => {
+  const ownsAuthService = !authService;
+  const getAuthService = () => authService ||= createAuthService({
+    filename: authFilename || path.join(process.env.ZIJIAN_AUTH_DATA_DIR || path.join(ROOT, '.data'), 'auth.sqlite'),
+    providers: authProviders || createAuthProviders(),
+  });
+  const server = http.createServer(async (request, response) => {
     response.setHeader('X-Content-Type-Options', 'nosniff');
     response.setHeader('Referrer-Policy', 'no-referrer');
     response.setHeader('Content-Security-Policy', "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'");
@@ -350,8 +357,30 @@ export function createServer({ translate, analyze, review, titleArticle, config,
     try { pathname = new URL(request.url, `http://${host}`).pathname; }
     catch { return json(response, 400, { error: '请求地址无效。' }); }
     try {
+      const secure = Boolean(request.socket.encrypted) || (trustProxy && request.headers['x-forwarded-proto'] === 'https');
+      const hostname = new URL(`http://${host}`).hostname;
+      const accessRoute = pathname.startsWith('/api/auth/') || pathname === '/api/guest/start' || pathname.startsWith('/api/coupons/') || pathname.startsWith('/api/referrals/');
+      const protectedRoute = accessRoute || ['/api/translate', '/api/analyze', '/api/review', '/api/article-title'].includes(pathname);
+      if (protectedRoute && !secure && !['127.0.0.1', 'localhost', '[::1]'].includes(hostname)) {
+        return json(response, 426, { error: '请通过网站的 HTTPS 加密地址登录和练习。', code: 'HTTPS_REQUIRED' });
+      }
       if (pathname === '/api/status' && request.method === 'GET') {
         return json(response, 200, { app: 'zijian-translation', configured, model: 'deepseek-flash' });
+      }
+      if (accessRoute) {
+        const isSession = pathname === '/api/auth/session';
+        if (request.method !== (isSession ? 'GET' : 'POST')) return json(response, 405, { error: '请求方法不受支持。' });
+        let body;
+        if (!isSession) {
+          if (typeof origin !== 'string') return json(response, 403, { error: '请从本站页面开始体验或操作账号。', code: 'CSRF_INVALID' });
+          if (!/^application\/json(?:\s*;|$)/i.test(request.headers['content-type'] || '')) return json(response, 415, { error: '账号请求格式不受支持。' });
+          body = await readJson(request, { maxBytes: 8192, invalidMessage: '账号请求格式无效。', largeMessage: '账号请求过大。' });
+          if (!body || typeof body !== 'object' || Array.isArray(body)) throw new AuthError(400, '账号请求格式无效。', 'INVALID_INPUT');
+        }
+        const forwarded = request.headers['x-real-ip'];
+        const clientIp = trustProxy && typeof forwarded === 'string' && isIP(forwarded) ? forwarded : request.socket.remoteAddress;
+        const result = await getAuthService().handle({ request, response, pathname, body, origin: `${secure ? 'https' : 'http'}://${host}`, clientIp, secure });
+        return json(response, 200, result);
       }
       if (pathname === '/api/feedback') {
         if (request.method === 'GET') {
@@ -378,6 +407,7 @@ export function createServer({ translate, analyze, review, titleArticle, config,
         if (!/^application\/json(?:\s*;|$)/i.test(request.headers['content-type'] || '')) return json(response, 415, { error: '翻译请求格式不受支持。' });
         const body = await readJson(request);
         if (!body || typeof body !== 'object' || Array.isArray(body)) throw new TranslationError(400, '翻译请求格式无效。');
+        await getAuthService().requireAccess(request);
         return json(response, 200, await translate(body.text));
       }
       if (pathname === '/api/analyze') {
@@ -386,6 +416,7 @@ export function createServer({ translate, analyze, review, titleArticle, config,
         const body = await readJson(request);
         if (!body || typeof body !== 'object' || Array.isArray(body)) throw new TranslationError(400, '分析请求格式无效。');
         const input = validateAnalysisInput(body.text, body.context);
+        await getAuthService().requireAccess(request);
         return json(response, 200, await analyze(input.text, input.context));
       }
       if (pathname === '/api/article-title') {
@@ -393,7 +424,9 @@ export function createServer({ translate, analyze, review, titleArticle, config,
         if (!/^application\/json(?:\s*;|$)/i.test(request.headers['content-type'] || '')) return json(response, 415, { error: '起名请求格式不受支持。' });
         const body = await readJson(request);
         if (!body || typeof body !== 'object' || Array.isArray(body)) throw new ArticleTitleError(400, '起名请求格式无效。');
-        return json(response, 200, await titleArticle(validateTitleInput(body.text)));
+        const text = validateTitleInput(body.text);
+        await getAuthService().requireAccess(request);
+        return json(response, 200, await titleArticle(text));
       }
       if (pathname === '/api/review') {
         if (request.method !== 'POST') return json(response, 405, { error: '请通过网页发起表达评析。' });
@@ -401,6 +434,7 @@ export function createServer({ translate, analyze, review, titleArticle, config,
         const body = await readJson(request, { maxBytes: 150000, invalidMessage: '表达评析请求格式无效，请刷新页面后重试。', largeMessage: '请求过大，请减少每组句数或输入内容。' });
         if (!body || typeof body !== 'object' || Array.isArray(body)) throw new TranslationError(400, '表达评析请求格式无效。');
         const input = validateSentenceReviewInput(body.reference, body.answer);
+        await getAuthService().requireAccess(request);
         return json(response, 200, await review(input.reference, input.answer));
       }
       const asset = ASSETS.get(pathname);
@@ -410,8 +444,15 @@ export function createServer({ translate, analyze, review, titleArticle, config,
       response.end(request.method === 'HEAD' ? undefined : content);
     } catch (error) {
       if (response.destroyed) return;
-      const safeError = error instanceof TranslationError || error instanceof FeedbackError || error instanceof SentenceReviewError || error instanceof ArticleTitleError ? error : new TranslationError(500, '本机服务暂时出错，请稍后重试。');
+      const safeError = error instanceof TranslationError || error instanceof FeedbackError || error instanceof SentenceReviewError || error instanceof ArticleTitleError || error instanceof AuthError ? error : new TranslationError(500, '本机服务暂时出错，请稍后重试。');
       const details = { error: safeError.message };
+      if (safeError instanceof AuthError) {
+        details.code = safeError.code;
+        if (safeError.retryAfter) {
+          details.retryAfter = Math.max(1, Math.ceil(safeError.retryAfter));
+          response.setHeader('Retry-After', String(details.retryAfter));
+        }
+      }
       if (safeError instanceof FeedbackError && safeError.status === 429) {
         details.code = safeError.code === 'RATE_LIMIT' ? 'RATE_LIMIT' : 'DAILY_LIMIT';
         details.retryAfter = Math.max(1, Math.ceil(safeError.retryAfter || 60));
@@ -420,6 +461,8 @@ export function createServer({ translate, analyze, review, titleArticle, config,
       json(response, safeError.status, details);
     }
   });
+  server.on('close', () => { if (ownsAuthService) authService?.close(); });
+  return server;
 }
 
 function openBrowser(url) {
@@ -452,7 +495,7 @@ async function main() {
     console.log(`火星叔叔的雅思作文打字练习 · 中文翻译已启动：${url}`);
     if (serverConfig.publicOrigins.length) console.log(`网站访问地址：${serverConfig.publicOrigins.join('、')}`);
     console.log(`模型：${config.model}（快速，关闭思考）；按需翻译，译文仅在内存复用。`);
-    console.log(config.key ? '密钥已从本机配置读取。关闭此窗口或按 Ctrl+C 停止服务。' : '尚未配置密钥；练习可用，翻译前请配置 .env 并重启。');
+    console.log(config.key ? 'AI 密钥已从本机配置读取。关闭此窗口或按 Ctrl+C 停止服务。' : '尚未配置 AI 密钥；游客可体验 24 小时，AI 功能需配置 .env 并重启。');
     if (process.argv.includes('--open')) openBrowser(url);
   });
 }

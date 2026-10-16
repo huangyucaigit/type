@@ -21,7 +21,7 @@ function memoryStorage(initial = {}) {
 
 // Run the actual browser scripts against a small event/element harness. Layout,
 // native text selection and file pickers are verified separately in a browser.
-function createPage({ fetch, titleFetch, protocol = 'http:', storage = memoryStorage(), storageGetter } = {}) {
+function createPage({ fetch, titleFetch, protocol = 'http:', storage = memoryStorage(), storageGetter, auth } = {}) {
   const elements = new Map();
   const intervals = [];
   const frames = new Map();
@@ -121,12 +121,13 @@ function createPage({ fetch, titleFetch, protocol = 'http:', storage = memorySto
     setInterval(callback) { intervals.push(callback); },
   });
   context.window = context;
+  if (auth) context.ZijianAuth = auth;
   context.location = { protocol };
   Object.defineProperty(context, 'localStorage', { get: storageGetter || (() => storage) });
   context.innerHeight = 900;
   context.addEventListener = () => {};
   context.scrollBy = () => {};
-  const sentence = { created: [], sources: [], titles: [], active: [], resets: [], visibility: [], refreshes: 0 };
+  const sentence = { created: [], sources: [], titles: [], active: [], resets: [], refreshes: 0 };
   context.SentencePractice = { create(options) {
     sentence.created.push({ source: options.source, title: options.title, kind: options.kind });
     return {
@@ -134,7 +135,6 @@ function createPage({ fetch, titleFetch, protocol = 'http:', storage = memorySto
       setTitle(title) { sentence.titles.push(title); },
       setActive(active) { sentence.active.push(active); },
       reset(focus) { sentence.resets.push(focus); },
-      setTimerVisible(visible) { sentence.visibility.push(visible); },
       refreshTimer() { sentence.refreshes += 1; },
       getLearningSources() { return []; },
     };
@@ -143,7 +143,6 @@ function createPage({ fetch, titleFetch, protocol = 'http:', storage = memorySto
     vm.runInContext(fs.readFileSync(path.join(__dirname, '..', name), 'utf8'), context, { filename: name });
   }
   const $ = id => document.getElementById(id);
-  $('showTimer').checked = true;
 
   return {
     $,
@@ -198,7 +197,7 @@ test('the real app sends imported context on double-click and learning leaves th
   await page.type('We make progress.');
   await page.fire('timerStart', 'click');
   page.tick(4000);
-  await page.fire('timerPause', 'click');
+  await page.fire('timerStart', 'click');
   page.$('typingInput').setSelectionRange(8, 16);
   await page.fire('typingInput', 'select');
   assert.equal(requests.length, 0);
@@ -353,7 +352,7 @@ test('completion preserves manual timing, and applying a new article resets inpu
   assert.equal(page.$('timerValue').textContent, '00:03');
   page.tick(5000);
   assert.equal(page.$('timerValue').textContent, '00:08');
-  await page.fire('timerPause', 'click');
+  await page.fire('timerStart', 'click');
   page.tick(5000);
   assert.equal(page.$('timerValue').textContent, '00:08');
   await page.open();
@@ -368,7 +367,7 @@ test('completion preserves manual timing, and applying a new article resets inpu
   assert.equal(page.$('progressFill').style.width, '0%');
 });
 
-test('hiding the timer preserves elapsed time and restarting resets only the practice', async () => {
+test('switching modes changes the visible stopwatch, preserves elapsed time and restarting resets only the practice', async () => {
   const page = createPage();
   const sourceBefore = page.$('sourceReadable').textContent;
   page.tick(5000);
@@ -376,13 +375,13 @@ test('hiding the timer preserves elapsed time and restarting resets only the pra
   await page.fire('timerStart', 'click');
   await page.type('L');
   page.tick(1200);
-  page.$('showTimer').checked = false;
-  await page.fire('showTimer', 'change');
+  await page.fire('sentenceModeButton', 'click');
   assert.equal(page.$('timerDisplay').hidden, true);
+  assert.equal(page.$('sentenceTimerDisplay').hidden, false);
   page.tick(4200);
-  page.$('showTimer').checked = true;
-  await page.fire('showTimer', 'change');
+  await page.fire('sentenceFullModeButton', 'click');
   assert.equal(page.$('timerDisplay').hidden, false);
+  assert.equal(page.$('sentenceTimerDisplay').hidden, true);
   assert.equal(page.$('timerValue').textContent, '00:05');
   await page.fire('restartButton', 'click');
   assert.equal(page.$('sourceReadable').textContent, sourceBefore);
@@ -391,7 +390,7 @@ test('hiding the timer preserves elapsed time and restarting resets only the pra
   assert.equal(page.$('statusLabel').textContent, '准备开始');
 });
 
-test('typing never starts or resumes a stopwatch and practice status is independent of timing', async () => {
+test('one stopwatch button starts, pauses and continues while typing never changes its state', async () => {
   const page = createPage();
   await page.type('L');
   page.tick(2000);
@@ -399,21 +398,92 @@ test('typing never starts or resumes a stopwatch and practice status is independ
   assert.equal(page.$('timerState').textContent, '未开始');
   assert.equal(page.$('statusLabel').textContent, '练习中');
   assert.equal(page.$('timerStart').disabled, false);
-  assert.equal(page.$('timerPause').disabled, true);
+  assert.equal(page.$('timerStart').textContent, '开始');
+  assert.equal(page.$('timerStart').getAttribute('aria-label'), '开始全文模式秒表');
   await page.fire('timerStart', 'click');
   page.tick(2200);
-  assert.equal(page.$('timerStart').disabled, true);
-  assert.equal(page.$('timerPause').disabled, false);
-  await page.fire('timerPause', 'click');
+  assert.equal(page.$('timerStart').disabled, false);
+  assert.equal(page.$('timerStart').textContent, '暂停');
+  assert.equal(page.$('timerStart').getAttribute('aria-label'), '暂停全文模式秒表');
+  await page.fire('timerStart', 'click');
   await page.type('Learning');
   page.tick(10000);
   assert.equal(page.$('timerValue').textContent, '00:02');
   assert.equal(page.$('timerState').textContent, '已暂停');
   assert.equal(page.$('timerStart').textContent, '继续');
+  assert.equal(page.$('timerStart').disabled, false);
+  assert.equal(page.$('timerStart').getAttribute('aria-label'), '继续全文模式秒表');
   await page.fire('timerStart', 'click');
   page.tick(1900);
   assert.equal(page.$('timerValue').textContent, '00:04');
   assert.equal(page.$('typingInput').value, 'Learning');
+  assert.equal(page.$('timerStart').textContent, '暂停');
+  assert.equal(page.$('timerStart').getAttribute('aria-label'), '暂停全文模式秒表');
+});
+
+test('repeated stopwatch clicks during authorization start once, and pausing needs no new authorization', async () => {
+  let authorize;
+  let requests = 0;
+  let grants = 0;
+  const pending = new Promise(resolve => { authorize = resolve; });
+  const page = createPage({ auth: {
+    hasAccess: () => true,
+    canPractice: () => true,
+    requireAccess: () => true,
+    isDialogOpen: () => false,
+    async runWithAccess(action) {
+      requests++;
+      await pending;
+      grants++;
+      return action();
+    },
+  } });
+  const first = page.fire('timerStart', 'click');
+  assert.equal(page.$('timerStart').disabled, true);
+  const duplicate = page.fire('timerStart', 'click');
+  page.tick(2000);
+  assert.equal(page.$('timerValue').textContent, '00:00');
+  assert.equal(requests, 1);
+  authorize();
+  await Promise.all([first, duplicate]);
+  assert.equal(grants, 1);
+  assert.equal(page.$('timerStart').disabled, false);
+  assert.equal(page.$('timerStart').textContent, '暂停');
+  page.tick(2200);
+  await page.fire('timerStart', 'click');
+  assert.equal(page.$('timerState').textContent, '已暂停');
+  assert.equal(page.$('timerStart').textContent, '继续');
+  assert.equal(requests, 1);
+  page.tick(3000);
+  assert.equal(page.$('timerValue').textContent, '00:02');
+});
+
+test('the digital stopwatch crosses a minute, pauses, resets and supports hour readings', async () => {
+  const page = createPage();
+  await page.fire('timerStart', 'click');
+  page.tick(59000);
+  assert.equal(page.$('timerValue').textContent, '00:59');
+  page.tick(2000);
+  assert.equal(page.$('timerValue').textContent, '01:01');
+  assert.equal(page.$('timerState').textContent, '计时中');
+  await page.fire('timerStart', 'click');
+  page.tick(5000);
+  assert.equal(page.$('timerValue').textContent, '01:01');
+  assert.equal(page.$('timerState').textContent, '已暂停');
+  await page.fire('timerClear', 'click');
+  assert.equal(page.$('timerValue').textContent, '00:00');
+  assert.equal(page.$('timerState').textContent, '未开始');
+  assert.equal(page.$('timerDisplay').getAttribute('data-long-time'), 'false');
+  await page.fire('timerStart', 'click');
+  page.tick(3599000);
+  assert.equal(page.$('timerValue').textContent, '59:59');
+  assert.equal(page.$('timerDisplay').getAttribute('data-long-time'), 'false');
+  page.tick(1000);
+  assert.equal(page.$('timerValue').textContent, '1:00:00');
+  assert.equal(page.$('timerDisplay').getAttribute('data-long-time'), 'true');
+  await page.fire('timerClear', 'click');
+  assert.equal(page.$('timerValue').textContent, '00:00');
+  assert.equal(page.$('timerDisplay').getAttribute('data-long-time'), 'false');
 });
 
 test('clear stops and zeros either a running or paused stopwatch without losing typing errors', async () => {
@@ -423,7 +493,7 @@ test('clear stops and zeros either a running or paused stopwatch without losing 
     const errorHint = page.$('errorHint').textContent;
     await page.fire('timerStart', 'click');
     page.tick(2200);
-    if (pauseFirst) await page.fire('timerPause', 'click');
+    if (pauseFirst) await page.fire('timerStart', 'click');
     await page.fire('timerClear', 'click');
     assert.equal(page.$('typingInput').value, 'Wrong');
     assert.equal(page.$('errorHint').textContent, errorHint);
@@ -431,7 +501,7 @@ test('clear stops and zeros either a running or paused stopwatch without losing 
     assert.equal(page.$('timerState').textContent, '未开始');
     assert.equal(page.$('timerStart').textContent, '开始');
     assert.equal(page.$('timerStart').disabled, false);
-    assert.equal(page.$('timerPause').disabled, true);
+    assert.equal(page.$('timerStart').getAttribute('aria-label'), '开始全文模式秒表');
     page.tick(5000);
     assert.equal(page.$('timerValue').textContent, '00:00');
     await page.type('L');
@@ -529,7 +599,7 @@ test('another confirmed article replaces the saved article without saving practi
   await page.type('The');
   await page.fire('timerStart', 'click');
   page.tick(2300);
-  await page.fire('timerPause', 'click');
+  await page.fire('timerStart', 'click');
   await page.fire('timerClear', 'click');
   await page.fire('restartButton', 'click');
   await page.fire('sentenceModeButton', 'click');

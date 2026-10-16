@@ -3,6 +3,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const http = require('node:http');
+const { createTestAuth, authenticate } = require('./auth-fixture.cjs');
 
 const modulePromise = import('../translation-server.mjs');
 const secret = 'test-secret-must-never-be-returned';
@@ -32,7 +33,9 @@ async function rejectsWith(promise, status, pattern) {
 async function withServer(run, overrides = {}) {
   const { createServer, TranslationError } = await modulePromise;
   const requests = [];
+  const authService = await createTestAuth();
   const server = createServer({
+    authService,
     configured: true,
     translate: async text => {
       requests.push(text);
@@ -47,9 +50,10 @@ async function withServer(run, overrides = {}) {
   });
   const port = server.address().port;
   const host = `127.0.0.1:${port}`;
+  let authCookie = '';
   function request(url = '/', { method = 'GET', headers = {}, body } = {}) {
     return new Promise((resolve, reject) => {
-      const req = http.request({ hostname: '127.0.0.1', port, path: url, method, headers: { Host: host, ...headers } }, res => {
+      const req = http.request({ hostname: '127.0.0.1', port, path: url, method, headers: { Host: host, Cookie: authCookie, ...headers } }, res => {
         const chunks = [];
         res.on('data', chunk => chunks.push(chunk));
         res.on('error', reject);
@@ -60,8 +64,8 @@ async function withServer(run, overrides = {}) {
       req.end();
     });
   }
-  try { await run({ request, requests, host, port }); }
-  finally { await new Promise((resolve, reject) => server.close(error => error ? reject(error) : resolve())); }
+  try { authCookie = await authenticate(request, host); await run({ request, requests, host, port }); }
+  finally { await new Promise((resolve, reject) => server.close(error => error ? reject(error) : resolve())); authService.close(); }
 }
 
 test('translation config accepts current and existing key/address aliases without changing the fast model', async () => {
@@ -250,7 +254,7 @@ test('truncated and empty provider results are rejected instead of cached', asyn
 
 test('local server serves the working page/assets and publishes only safe status metadata', async () => {
   await withServer(async ({ request, requests }) => {
-    const publicFiles = ['/', '/index.html', '/about.html', '/styles.css', '/sentence-mode.css', '/about.css', '/robots.txt', '/sitemap.xml', '/app.js', '/typing-core.js', '/sentence-core.js', '/sentence-mode.js', '/reference-selection.js', '/selection-translation.js'];
+    const publicFiles = ['/', '/index.html', '/about.html', '/styles.css', '/sentence-mode.css', '/about.css', '/auth.css', '/starter-wheel.css', '/share-card.css', '/robots.txt', '/sitemap.xml', '/app.js', '/typing-core.js', '/sentence-core.js', '/sentence-mode.js', '/reference-selection.js', '/selection-translation.js', '/auth.js', '/starter-wheel.js', '/qr-code.js', '/share-card.js'];
     for (const file of publicFiles) {
       const response = await request(file);
       assert.equal(response.status, 200, file);
@@ -305,7 +309,7 @@ test('local server rejects foreign Host and Origin before translating, including
   });
 });
 
-test('public deployment accepts configured IP/domain while preserving same-origin checks', async () => {
+test('public deployment exposes health checks but requires HTTPS for account-protected features', async () => {
   await withServer(async ({ request, requests }) => {
     for (const host of ['47.106.182.159', 'type.where.work', 'type.where.work:80', 'TYPE.WHERE.WORK']) {
       const status = await request('/api/status', { headers: { Host: host } });
@@ -315,7 +319,7 @@ test('public deployment accepts configured IP/domain while preserving same-origi
         headers: { Host: host, Origin: `http://${host.startsWith('47.') ? host : 'type.where.work'}`, 'Content-Type': 'application/json' },
         body: JSON.stringify({ text: 'Hello.' }),
       });
-      assert.equal(response.status, 200, host);
+      assert.equal(response.status, 426, host);
     }
     const accepted = requests.length;
     for (const headers of [

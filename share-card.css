@@ -1,0 +1,23 @@
+.share-entry{display:inline-flex;align-items:center;gap:5px;border:0;background:none;color:#788b6d;padding:3px 0;font-size:11px;line-height:1.7;min-height:28px;white-space:nowrap}
+.share-entry svg{width:14px;height:14px}
+.share-entry:hover{color:var(--green);text-decoration:underline;text-underline-offset:4px}
+.share-entry:focus-visible{outline:2px solid #8fac96;outline-offset:4px;border-radius:3px}
+.share-dialog{width:min(420px,calc(100% - 28px));padding:24px;max-height:calc(100dvh - 28px);overscroll-behavior:contain}
+.share-dialog .dialog-header{gap:14px;align-items:flex-start}
+.share-dialog .dialog-header h2{font-size:21px;margin-top:7px;margin-bottom:6px}
+.share-dialog .icon-button{flex:none}
+.share-dialog .dialog-description{margin:8px 0 17px;line-height:1.8;font-size:12px}
+.share-preview{display:flex;justify-content:center;align-items:center;min-height:120px;background:#eff1e8;border:1px solid #e2e7d8;border-radius:12px;padding:12px;overflow:hidden}
+.share-preview:has(img[hidden]){background:#f4f5ee}
+.share-preview img{display:block;width:auto;height:auto;max-width:100%;max-height:min(440px,43dvh);border-radius:7px;box-shadow:0 3px 16px #344d2c12;object-fit:contain;-webkit-user-select:auto;user-select:auto;-webkit-touch-callout:default}
+.share-note{margin:12px 0;color:#839177;font-size:10px;line-height:1.85;overflow-wrap:anywhere}
+.share-note.is-error{color:#b65049}
+.share-link-row{display:flex;align-items:stretch;gap:8px;margin:13px 0 10px;min-width:0}
+.share-link-row input{min-width:0;flex:1;border:1px solid #dce2d3;background:#fafbf6;border-radius:8px;color:#728467;padding:9px 10px;font-size:10px;line-height:1.6;min-height:41px;text-overflow:ellipsis}
+.share-link-row .button{flex:none;padding:9px 12px;font-size:11px;min-height:41px}
+.share-actions{display:flex;gap:8px}
+.share-actions .button{flex:1;min-height:42px;font-size:12px}
+.share-dialog #shareLogin{display:block;margin:3px auto 0;font-size:11px;text-align:center}
+body:has(#shareDialog[open]){overflow:hidden}
+@media(max-width:480px){.share-dialog{padding:20px 17px;max-height:calc(100dvh - 20px);width:calc(100% - 24px)}.share-dialog .dialog-header h2{font-size:20px}.share-preview{padding:10px}.share-preview img{max-height:42dvh}.share-note{font-size:10px}.share-link-row{gap:6px}.share-link-row input{font-size:10px}.share-link-row .button{padding:9px 10px}}
+@media(prefers-reduced-motion:reduce){.share-dialog .button{transition:none}}

@@ -53,3 +53,92 @@ dialog{width:min(680px,calc(100% - 32px));max-height:calc(100dvh - 48px);border:
 .selection-translation-header .icon-button{width:44px;height:44px;min-width:44px;min-height:44px;touch-action:manipulation}
 .selection-analysis-expand,.selection-translation-retry{min-height:44px;font-size:12px;touch-action:manipulation}
 @media(max-width:600px){.selection-translation-popup{padding:10px 18px calc(18px + env(safe-area-inset-bottom,0px));border-radius:18px 18px 10px 10px;box-shadow:0 -8px 36px #24351e24;font-size:14px;-webkit-overflow-scrolling:touch}.selection-translation-header{top:-10px;padding-top:0;min-height:53px;font-size:12px}.selection-translation-source{font-size:14px;max-height:128px}.selection-translation-text{font-size:16px}.selection-analysis-label{font-size:12px}.selection-analysis-value{font-size:14px}.selection-analysis-expand,.selection-translation-retry{font-size:13px}.selection-translation-status{font-size:12px}}
+
+/* Keep article actions, practice mode, and timekeeping in separate places. */
+.practice-page .page-shell {
+  width: min(1080px, calc(100% - 200px));
+  margin-left: max(32px, calc((100vw - 1280px) / 2));
+  margin-right: auto;
+}
+.practice-page .toolbar {
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 12px 22px;
+  padding-top: 22px;
+  padding-bottom: 20px;
+}
+.practice-page .toolbar-buttons { flex-wrap: wrap; }
+.practice-page .paper-header { align-items: flex-start; }
+.practice-page .article-heading { flex: 1; }
+.practice-page .article-mode-control { margin-top: 4px; margin-left: auto; }
+.floating-timer {
+  position: fixed;
+  z-index: 20;
+  top: 50%;
+  right: 20px;
+  width: 132px;
+  padding: 12px 10px;
+  border: 1px solid #dce3d5;
+  border-radius: 12px;
+  background: var(--paper);
+  box-shadow: 0 6px 22px #38492d0a;
+  transform: translateY(-50%);
+}
+.practice-page .floating-timer .timer-display {
+  display: block;
+  min-width: 0;
+  padding: 0;
+  border: 0;
+  text-align: center;
+}
+.practice-page .floating-timer .timer-display[hidden] { display: none; }
+.floating-timer .timer-label { justify-content: center; color: #8a9581; font-size: 9px; line-height: 14px; letter-spacing: 0; }
+.floating-timer .timer-value { display: block; margin: 4px 0 0; color: #4e634d; font-size: 25px; line-height: 1.2; letter-spacing: .5px; font-variant-numeric: tabular-nums; }
+.floating-timer [data-long-time="true"] .timer-value { font-size: 17px; line-height: 30px; letter-spacing: 0; }
+.floating-timer .timer-state { margin: 2px 0 0; color: #8a9581; font-size: 9px; line-height: 12px; }
+.floating-timer .timer-controls { justify-content: center; gap: 3px; margin-top: 8px; }
+.floating-timer .timer-button { flex: 1; min-width: 0; min-height: 29px; padding: 4px 2px; border-radius: 5px; font-size: 10px; line-height: 1.5; touch-action: manipulation; }
+.floating-timer .timer-button:disabled { opacity: 1; color: #aeb4a4; background: #f5f5ef; border-color: #e5e6dc; }
+@media (max-width: 1100px) {
+  .practice-page .page-shell { width: calc(100% - 192px); }
+  .practice-page .paper-header { flex-wrap: wrap; gap: 16px 20px; }
+  .practice-page .article-heading { flex-basis: 340px; }
+}
+@media (max-width: 1000px) {
+  html:has(.practice-page) { scroll-padding-bottom: 152px; }
+  .practice-page .page-shell {
+    width: calc(100% - 64px);
+    margin: 0 auto;
+    padding-bottom: 152px;
+  }
+  .floating-timer {
+    top: auto;
+    right: 16px;
+    bottom: calc(14px + env(safe-area-inset-bottom, 0px));
+    width: 124px;
+    padding: 10px 8px;
+    transform: none;
+  }
+  .floating-timer .timer-value { font-size: 24px; }
+  .floating-timer [data-long-time="true"] .timer-value { font-size: 16px; line-height: 28.8px; }
+  .floating-timer .timer-controls { margin-top: 7px; }
+  .floating-timer .timer-button { min-height: 28px; }
+}
+@media (max-width: 760px) {
+  .practice-page .page-shell { width: calc(100% - 40px); }
+  .practice-page .toolbar { padding-top: 18px; padding-bottom: 18px; }
+  .practice-page .toolbar .access-status { justify-content: flex-start; }
+  .practice-page .paper-header { flex-direction: row; align-items: flex-start; }
+  .practice-page .article-heading { flex-basis: 260px; }
+  .practice-page .article-mode-control { margin-top: 0; }
+}
+@media (max-width: 480px) {
+  .practice-page .toolbar { gap: 11px; }
+  .practice-page .toolbar .access-status { width: 100%; }
+  .practice-page .paper-header { gap: 16px; }
+  .practice-page .article-heading { flex-basis: 100%; }
+  .floating-timer { right: 12px; bottom: calc(12px + env(safe-area-inset-bottom, 0px)); }
+}
+@media (max-width: 400px) {
+  .practice-page .page-shell { width: calc(100% - 28px); }
+}

@@ -3,6 +3,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const http = require('node:http');
+const { createTestAuth, authenticate } = require('./auth-fixture.cjs');
 const serverModule = import('../translation-server.mjs');
 const reviewerModule = import('../sentence-review.mjs');
 const config = { key: 'private-review-test-key', endpoint: 'https://example.test/chat/completions', model: 'deepseek-flash' };
@@ -18,7 +19,9 @@ const result = {
 async function withServer(run, overrides = {}) {
   const { createServer } = await serverModule;
   const calls = [];
+  const authService = await createTestAuth();
   const server = createServer({
+    authService,
     config,
     translate: async () => ({ translation: '教育使社会受益。' }),
     analyze: async () => ({ analysis: {} }),
@@ -31,18 +34,19 @@ async function withServer(run, overrides = {}) {
   });
   const port = server.address().port;
   const host = `127.0.0.1:${port}`;
+  let authCookie = '';
   const request = (url = '/api/review', { method = 'POST', headers = {}, body = JSON.stringify(sample) } = {}) => new Promise((resolve, reject) => {
-    const req = http.request({ hostname: '127.0.0.1', port, path: url, method, headers: { Host: host, 'Content-Type': 'application/json', ...headers } }, res => {
+    const req = http.request({ hostname: '127.0.0.1', port, path: url, method, headers: { Host: host, Cookie: authCookie, 'Content-Type': 'application/json', ...headers } }, res => {
       const chunks = [];
       res.on('data', chunk => chunks.push(chunk));
       res.on('error', reject);
       res.on('end', () => resolve({ status: res.statusCode, headers: res.headers, body: Buffer.concat(chunks).toString('utf8') }));
     });
     req.on('error', reject);
-    req.end(body);
+    req.end(['GET', 'HEAD'].includes(method) ? undefined : body);
   });
-  try { await run({ request, calls, host }); }
-  finally { await new Promise(resolve => server.close(resolve)); }
+  try { authCookie = await authenticate(request, host); await run({ request, calls, host }); }
+  finally { await new Promise(resolve => server.close(resolve)); authService.close(); }
 }
 
 test('review route passes the exact group and draft after trimming, with private no-store responses', async () => {

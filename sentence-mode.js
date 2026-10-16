@@ -5,7 +5,13 @@
     const { groupSentences, splitSentences, compareWords } = window.SentenceCore;
     const { PracticeClock, formatDuration } = window.TypingCore;
     const $ = (id) => document.getElementById(id);
+    const requiresAuth = document.documentElement?.dataset?.authRequired === "true";
+    const hasAccess = () => window.ZijianAuth ? window.ZijianAuth.hasAccess() : !requiresAuth;
+    const canPractice = () => window.ZijianAuth ? window.ZijianAuth.canPractice() : !requiresAuth;
+    const requireAccess = () => window.ZijianAuth ? window.ZijianAuth.requireAccess() : !requiresAuth;
+    const withAccess = action => window.ZijianAuth ? window.ZijianAuth.runWithAccess(action) : !requiresAuth ? action() : undefined;
     const clock = new PracticeClock();
+    let togglingTimer = false;
     const normalize = text => String(text ?? "").replace(/^\uFEFF/u, "").replace(/\r\n?/gu, "\n").trim();
     let sourceText = normalize(source);
     let articleTitle = title;
@@ -83,6 +89,8 @@
 
     async function loadTranslation(item) {
       if (item.translationLoading || item.translationText) return;
+      if (window.ZijianAuth && !hasAccess() && !await window.ZijianAuth.ensureAccess()) return;
+      if (!requireAccess()) return;
       if (window.location?.protocol === "file:") {
         item.translationStatus.textContent = "请先双击“启动翻译.cmd”，再打开下方翻译版网页使用中文翻译。";
         item.translationLink.hidden = false;
@@ -118,7 +126,10 @@
     }
 
     function refreshTimer() {
-      const value = formatDuration(clock.elapsed());
+      const elapsed = clock.elapsed();
+      const value = formatDuration(elapsed);
+      const timer = $("sentenceTimerDisplay");
+      timer.setAttribute("data-long-time", String(value.length > 5));
       const running = clock.state === "running";
       const paused = clock.state === "stopped";
       const state = running ? "计时中" : paused ? "已暂停" : "未开始";
@@ -129,9 +140,12 @@
       const label = `分句模式秒表 ${value}，${state}`;
       if ($("sentenceTimerDisplay").getAttribute("aria-label") !== label) $("sentenceTimerDisplay").setAttribute("aria-label", label);
       if ($("sentenceTimerState").textContent !== state) $("sentenceTimerState").textContent = state;
-      $("sentenceTimerStart").textContent = paused ? "继续" : "开始";
-      $("sentenceTimerStart").disabled = running;
-      $("sentenceTimerPause").disabled = !running;
+      const action = running ? "暂停" : paused ? "继续" : "开始";
+      $("sentenceTimerStart").textContent = action;
+      $("sentenceTimerStart").disabled = togglingTimer;
+      $("sentenceTimerStart").setAttribute("aria-label", `${action}分句模式秒表`);
+      $("sentenceTimerStart").setAttribute("aria-pressed", String(running));
+      $("sentenceTimerClear").disabled = togglingTimer;
     }
 
     function refreshSummary() {
@@ -150,6 +164,7 @@
     }
 
     function edit(item, focus = true) {
+      if (!requireAccess()) return;
       onLearningReset();
       cancelReview(item);
       item.analysis = null;
@@ -273,6 +288,8 @@
     }
 
     async function review(item) {
+      if (window.ZijianAuth && !hasAccess() && !await window.ZijianAuth.ensureAccess()) return;
+      if (!requireAccess()) return;
       if (!active || item.reviewPending || !items.includes(item)) return;
       edit(item, false);
       showReference(item, true);
@@ -370,6 +387,7 @@
     }
 
     function checkWords(item) {
+      if (!requireAccess()) return;
       onLearningReset();
       cancelReview(item);
       item.reviewPanel.hidden = true;
@@ -468,6 +486,7 @@
       item.inputLabel = element("label", "group-input-label", "你的输入");
       item.inputLabel.htmlFor = `sentenceAnswer-${number}`;
       item.answer = element("textarea", "sentence-answer");
+      item.answer.readOnly = !canPractice();
       item.answer.id = `sentenceAnswer-${number}`;
       item.answer.setAttribute("aria-label", `第 ${number} 组输入`);
       item.answer.setAttribute("aria-describedby", `sentenceHelp sentenceFeedback-${number}`);
@@ -597,7 +616,7 @@
       if (focus) items[0]?.answer.focus({ preventScroll: true });
     }
 
-    $("applyGrouping").addEventListener("click", () => {
+    $("applyGrouping").addEventListener("click", () => withAccess(() => {
       const value = $("sentencesPerGroup").value.trim();
       const count = Number(value);
       if (!value || !Number.isSafeInteger(count) || count < 1) {
@@ -612,16 +631,27 @@
       if (count === groupSize) return;
       groupSize = count;
       reset();
-    });
+    }));
     $("showAllReferences").addEventListener("click", () => items.forEach((item) => showReference(item, true)));
     $("hideAllReferences").addEventListener("click", () => items.forEach((item) => showReference(item, false)));
-    $("sentenceTimerStart").addEventListener("click", () => { clock.start(); refreshTimer(); });
-    $("sentenceTimerPause").addEventListener("click", () => { clock.pause(); refreshTimer(); });
+    $("sentenceTimerStart").addEventListener("click", async () => {
+      if (togglingTimer) return;
+      if (clock.state === "running") { clock.pause(); refreshTimer(); return; }
+      togglingTimer = true;
+      refreshTimer();
+      try { await withAccess(() => { clock.start(); refreshTimer(); }); }
+      finally { togglingTimer = false; refreshTimer(); }
+    });
     $("sentenceTimerClear").addEventListener("click", () => { clock.reset(); refreshTimer(); });
     reset();
     return {
       reset,
       refreshTimer,
+      refreshAccess() {
+        const allowed = canPractice();
+        items.forEach(item => { item.answer.readOnly = !allowed; });
+        if (!allowed) { clock.pause(); refreshTimer(); }
+      },
       setActive(value) {
         active = Boolean(value);
         if (!active) items.filter(item => item.reviewPending).forEach(item => edit(item, false));
@@ -644,7 +674,6 @@
           },
         }));
       },
-      setTimerVisible(visible) { $("sentenceTimerDisplay").hidden = !visible; refreshTimer(); },
       setTitle(title) {
         articleTitle = title;
         $("sentenceArticleTitle").textContent = title;

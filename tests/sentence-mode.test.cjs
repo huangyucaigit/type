@@ -10,7 +10,7 @@ const { TextDecoder } = require('node:util');
 // This harness runs the actual browser controllers and comparison modules.
 // Layout and trusted mouse defaults still require browser validation. Native
 // ranges below exercise the real controllers' selection and context mapping.
-function createPage({ source = 'First sentence. Second sentence! Third sentence?', integrated = false, fetch, protocol = 'http:', onLearningReset } = {}) {
+function createPage({ source = 'First sentence. Second sentence! Third sentence?', integrated = false, fetch, protocol = 'http:', onLearningReset, auth } = {}) {
   const roots = new Map();
   const intervals = [];
   const frames = new Map();
@@ -177,13 +177,13 @@ function createPage({ source = 'First sentence. Second sentence! Third sentence?
     setInterval(callback) { intervals.push(callback); return intervals.length; },
   });
   context.window = context;
+  if (auth) context.ZijianAuth = auth;
   context.innerHeight = 900;
   context.innerWidth = 900;
   context.addEventListener = () => {};
   context.getSelection = () => nativeSelection;
   context.scrollBy = () => {};
   const $ = id => document.getElementById(id);
-  $('showTimer').checked = true;
   if (integrated) {
     $('selectionTranslationPopup').append(...[
       'selectionTranslationSource', 'selectionTranslationText', 'selectionAnalysisType',
@@ -319,7 +319,8 @@ test('each group starts with a visible reference and a visible blank input', () 
   assert.equal(page.$('sentenceTimerValue').textContent, '00:00');
   assert.equal(page.$('sentenceTimerState').textContent, '未开始');
   assert.equal(page.$('sentenceTimerStart').disabled, false);
-  assert.equal(page.$('sentenceTimerPause').disabled, true);
+  assert.equal(page.$('sentenceTimerStart').textContent, '开始');
+  assert.equal(page.$('sentenceTimerStart').getAttribute('aria-label'), '开始分句模式秒表');
 });
 
 test('individual and global reference controls reveal and hide independently', async () => {
@@ -513,7 +514,7 @@ test('setting a new source resets drafts and timer while retaining the chosen gr
   assert.equal(page.$('sentenceTimerState').textContent, '未开始');
 });
 
-test('sentence stopwatch starts only on command and continues while its display is hidden', async () => {
+test('sentence stopwatch starts only on command and continues when its mode becomes inactive', async () => {
   const page = createPage();
   page.tick(5000);
   await page.fire('showAllReferences', 'click');
@@ -525,27 +526,26 @@ test('sentence stopwatch starts only on command and continues while its display 
   assert.equal(page.$('sentenceTimerValue').textContent, '00:00');
   await page.fire('sentenceTimerStart', 'click');
   assert.equal(page.$('sentenceTimerState').textContent, '计时中');
-  assert.equal(page.$('sentenceTimerStart').disabled, true);
-  assert.equal(page.$('sentenceTimerPause').disabled, false);
+  assert.equal(page.$('sentenceTimerStart').disabled, false);
+  assert.equal(page.$('sentenceTimerStart').textContent, '暂停');
+  assert.equal(page.$('sentenceTimerStart').getAttribute('aria-label'), '暂停分句模式秒表');
   page.tick(2200);
   assert.equal(page.$('sentenceTimerValue').textContent, '00:02');
-  page.controller.setTimerVisible(false);
-  assert.equal(page.$('sentenceTimerDisplay').hidden, true);
+  page.controller.setActive(false);
   page.tick(3400);
-  page.controller.setTimerVisible(true);
-  assert.equal(page.$('sentenceTimerDisplay').hidden, false);
+  page.controller.setActive(true);
   assert.equal(page.$('sentenceTimerValue').textContent, '00:05');
 });
 
-test('pause and continue preserve elapsed time and typing or checking never resumes it', async () => {
+test('one sentence stopwatch button pauses and continues without typing or checking resuming it', async () => {
   const page = createPage();
   await page.fire('sentenceTimerStart', 'click');
   page.tick(2200);
-  await page.fire('sentenceTimerPause', 'click');
+  await page.fire('sentenceTimerStart', 'click');
   assert.equal(page.$('sentenceTimerState').textContent, '已暂停');
   assert.equal(page.$('sentenceTimerStart').textContent, '继续');
   assert.equal(page.$('sentenceTimerStart').disabled, false);
-  assert.equal(page.$('sentenceTimerPause').disabled, true);
+  assert.equal(page.$('sentenceTimerStart').getAttribute('aria-label'), '继续分句模式秒表');
   assert.match(page.$('sentenceTimerDisplay').getAttribute('aria-label'), /已暂停/);
   await page.type(0, 'First typo.');
   await page.click(page.group(0).check);
@@ -556,9 +556,48 @@ test('pause and continue preserve elapsed time and typing or checking never resu
   await page.fire('sentenceTimerStart', 'click');
   page.tick(1900);
   assert.equal(page.$('sentenceTimerValue').textContent, '00:04');
-  await page.fire('sentenceTimerPause', 'click');
+  assert.equal(page.$('sentenceTimerStart').textContent, '暂停');
+  assert.equal(page.$('sentenceTimerStart').disabled, false);
+  assert.equal(page.$('sentenceTimerStart').getAttribute('aria-label'), '暂停分句模式秒表');
+  await page.fire('sentenceTimerStart', 'click');
   page.tick(10000);
   assert.equal(page.$('sentenceTimerValue').textContent, '00:04');
+});
+
+test('repeated sentence stopwatch clicks while authorization is pending start once and can pause directly', async () => {
+  let authorize;
+  let requests = 0;
+  let grants = 0;
+  const pending = new Promise(resolve => { authorize = resolve; });
+  const page = createPage({ auth: {
+    hasAccess: () => true,
+    canPractice: () => true,
+    requireAccess: () => true,
+    async runWithAccess(action) {
+      requests++;
+      await pending;
+      grants++;
+      return action();
+    },
+  } });
+  const first = page.fire('sentenceTimerStart', 'click');
+  assert.equal(page.$('sentenceTimerStart').disabled, true);
+  const duplicate = page.fire('sentenceTimerStart', 'click');
+  page.tick(2000);
+  assert.equal(page.$('sentenceTimerValue').textContent, '00:00');
+  assert.equal(requests, 1);
+  authorize();
+  await Promise.all([first, duplicate]);
+  assert.equal(grants, 1);
+  assert.equal(page.$('sentenceTimerStart').disabled, false);
+  assert.equal(page.$('sentenceTimerStart').textContent, '暂停');
+  page.tick(2200);
+  await page.fire('sentenceTimerStart', 'click');
+  assert.equal(page.$('sentenceTimerState').textContent, '已暂停');
+  assert.equal(page.$('sentenceTimerStart').textContent, '继续');
+  assert.equal(requests, 1);
+  page.tick(3000);
+  assert.equal(page.$('sentenceTimerValue').textContent, '00:02');
 });
 
 test('completion and later edits leave the stopwatch entirely under manual control', async () => {
@@ -575,7 +614,7 @@ test('completion and later edits leave the stopwatch entirely under manual contr
   page.tick(7000);
   assert.equal(page.$('sentenceTimerValue').textContent, '00:10');
   assert.equal(page.$('sentenceTimerState').textContent, '计时中');
-  await page.fire('sentenceTimerPause', 'click');
+  await page.fire('sentenceTimerStart', 'click');
   await page.click(page.group(0).edit);
   assert.doesNotMatch(page.$('sentenceSessionStatus').textContent, /已完成/);
   await page.type(0, 'First wrong.');
@@ -608,7 +647,8 @@ test('clearing the stopwatch keeps drafts, checked errors, references and transl
   assert.equal(page.$('sentenceTimerValue').textContent, '00:00');
   assert.equal(page.$('sentenceTimerState').textContent, '未开始');
   assert.equal(page.$('sentenceTimerStart').textContent, '开始');
-  assert.equal(page.$('sentenceTimerPause').disabled, true);
+  assert.equal(page.$('sentenceTimerStart').disabled, false);
+  assert.equal(page.$('sentenceTimerStart').getAttribute('aria-label'), '开始分句模式秒表');
   assert.equal(group.answer.value, 'First typo.');
   assert.equal(group.checked.hidden, false);
   assert.equal(group.reference.hidden, false);
@@ -624,13 +664,12 @@ test('clearing the stopwatch keeps drafts, checked errors, references and transl
   assert.equal(page.$('sentenceTimerValue').textContent, '00:01');
 });
 
-test('reset clears results and timer while preserving source, group size and timer visibility', async () => {
+test('reset clears results and timer while preserving source and group size', async () => {
   const page = createPage();
   await page.size(2);
   await page.fire('sentenceTimerStart', 'click');
   await page.type(0, 'Wrong');
   await page.click(page.group(0).check);
-  page.controller.setTimerVisible(false);
   page.tick(2300);
   const reference = page.group(0).reference.textContent;
   page.controller.reset(true);
@@ -640,7 +679,6 @@ test('reset clears results and timer while preserving source, group size and tim
   assert.equal(page.group(0).checked.hidden, true);
   assert.equal(page.$('sentencesPerGroup').value, '2');
   assert.equal(page.$('sentenceTimerValue').textContent, '00:00');
-  assert.equal(page.$('sentenceTimerDisplay').hidden, true);
 });
 
 test('the real app starts in realtime mode and retains both drafts through mode switches', async () => {
@@ -648,14 +686,28 @@ test('the real app starts in realtime mode and retains both drafts through mode 
   assert.equal(page.$('realtimePanel').hidden, false);
   assert.equal(page.$('sentencePanel').hidden, true);
   assert.equal(page.$('realtimeModeButton').getAttribute('aria-pressed'), 'true');
+  assert.equal(page.$('sentenceModeButton').getAttribute('aria-pressed'), 'false');
+  assert.equal(page.$('sentenceFullModeButton').getAttribute('aria-pressed'), 'true');
+  assert.equal(page.$('sentenceSplitModeButton').getAttribute('aria-pressed'), 'false');
   await page.realType('Learning');
   await page.fire('sentenceModeButton', 'click');
   assert.equal(page.$('realtimePanel').hidden, true);
   assert.equal(page.$('sentencePanel').hidden, false);
   assert.equal(page.$('sentenceModeButton').getAttribute('aria-pressed'), 'true');
+  assert.equal(page.$('realtimeModeButton').getAttribute('aria-pressed'), 'false');
+  assert.equal(page.$('sentenceFullModeButton').getAttribute('aria-pressed'), 'false');
+  assert.equal(page.$('sentenceSplitModeButton').getAttribute('aria-pressed'), 'true');
+  assert.equal(page.document.activeElement, page.$('sentenceSplitModeButton'));
   await page.type(0, 'My sentence draft');
   await page.click(page.group(0).check);
-  await page.fire('realtimeModeButton', 'click');
+  await page.fire('sentenceFullModeButton', 'click');
+  assert.equal(page.$('realtimePanel').hidden, false);
+  assert.equal(page.$('sentencePanel').hidden, true);
+  assert.equal(page.$('realtimeModeButton').getAttribute('aria-pressed'), 'true');
+  assert.equal(page.$('sentenceModeButton').getAttribute('aria-pressed'), 'false');
+  assert.equal(page.$('sentenceFullModeButton').getAttribute('aria-pressed'), 'true');
+  assert.equal(page.$('sentenceSplitModeButton').getAttribute('aria-pressed'), 'false');
+  assert.equal(page.document.activeElement, page.$('realtimeModeButton'));
   assert.equal(page.$('typingInput').value, 'Learning');
   await page.fire('sentenceModeButton', 'click');
   assert.equal(page.group(0).answer.value, 'My sentence draft');
@@ -717,24 +769,36 @@ test('restarting realtime mode preserves sentence drafts, results and elapsed ti
   assert.equal(page.$('sentenceTimerValue').textContent, '00:03');
 });
 
-test('the shared timer switch controls both mode displays without resetting clocks', async () => {
+test('the floating timer shows only the selected mode while independent clocks continue through switches', async () => {
   const page = createPage({ integrated: true });
-  await page.fire('timerStart', 'click');
-  await page.fire('sentenceTimerStart', 'click');
-  await page.realType('Learning');
-  await page.type(0, 'My sentence');
-  page.tick(2200);
-  page.$('showTimer').checked = false;
-  await page.fire('showTimer', 'change');
-  assert.equal(page.$('timerDisplay').hidden, true);
-  assert.equal(page.$('sentenceTimerDisplay').hidden, true);
-  page.tick(3300);
-  page.$('showTimer').checked = true;
-  await page.fire('showTimer', 'change');
   assert.equal(page.$('timerDisplay').hidden, false);
+  assert.equal(page.$('sentenceTimerDisplay').hidden, true);
+  await page.fire('timerStart', 'click');
+  await page.realType('Learning');
+  page.tick(2200);
+  await page.fire('sentenceModeButton', 'click');
+  assert.equal(page.$('timerDisplay').hidden, true);
   assert.equal(page.$('sentenceTimerDisplay').hidden, false);
+  await page.fire('sentenceTimerStart', 'click');
+  await page.type(0, 'My sentence');
+  page.tick(3300);
+  await page.fire('sentenceFullModeButton', 'click');
+  assert.equal(page.$('timerDisplay').hidden, false);
+  assert.equal(page.$('sentenceTimerDisplay').hidden, true);
   assert.equal(page.$('timerValue').textContent, '00:05');
+  assert.equal(page.$('sentenceTimerValue').textContent, '00:03');
+  await page.fire('timerStart', 'click');
+  page.tick(2000);
+  await page.fire('sentenceModeButton', 'click');
+  assert.equal(page.$('timerValue').textContent, '00:05');
+  assert.equal(page.$('timerState').textContent, '已暂停');
   assert.equal(page.$('sentenceTimerValue').textContent, '00:05');
+  assert.equal(page.$('sentenceTimerState').textContent, '计时中');
+  await page.fire('sentenceTimerClear', 'click');
+  assert.equal(page.$('sentenceTimerValue').textContent, '00:00');
+  assert.equal(page.group(0).answer.value, 'My sentence');
+  assert.equal(page.$('typingInput').value, 'Learning');
+  assert.equal(page.$('timerValue').textContent, '00:05');
 });
 
 function translated(text = '第一句话。') {
@@ -998,9 +1062,8 @@ test('learning reset notifications cover source hiding, input, checking and sess
   await page.size(2);
   await page.size(0);
   await page.fire('sentenceTimerStart', 'click');
-  await page.fire('sentenceTimerPause', 'click');
+  await page.fire('sentenceTimerStart', 'click');
   await page.fire('sentenceTimerClear', 'click');
-  page.controller.setTimerVisible(false);
   assert.equal(resets, before);
 });
 
@@ -1563,7 +1626,7 @@ test('double-clicking a correct checked word returns to editing without resuming
   const page = createPage({ source: 'Keep learning.' });
   await page.fire('sentenceTimerStart', 'click');
   page.tick(2100);
-  await page.fire('sentenceTimerPause', 'click');
+  await page.fire('sentenceTimerStart', 'click');
   await page.type(0, 'Keep learning.');
   const group = page.group(0);
   await page.key(group.answer, { metaKey: true });

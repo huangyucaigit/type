@@ -66,13 +66,16 @@ test('title failures release shared concurrency slots and can be retried', async
 
 test('title API validates method, body, origin and content type and serves the history asset', async t => {
   const { createServer } = await serverPromise;
+  const { createTestAuth, authenticate } = require('./auth-fixture.cjs');
+  const authService = await createTestAuth();
   const calls = [];
-  const server = createServer({ titleArticle: async text => { calls.push(text); return { title: '文章主题' }; } });
+  const server = createServer({ authService, titleArticle: async text => { calls.push(text); return { title: '文章主题' }; } });
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
-  t.after(() => new Promise(resolve => server.close(resolve)));
+  t.after(async () => { await new Promise(resolve => server.close(resolve)); authService.close(); });
   const base = `http://127.0.0.1:${server.address().port}`;
+  const cookie = await authenticate((url, options) => fetch(`${base}${url}`, options), new URL(base).host);
   const post = (body, headers = {}) => fetch(`${base}/api/article-title`, { method: 'POST',
-    headers: { 'Content-Type': 'application/json', ...headers }, body: JSON.stringify(body) });
+    headers: { Cookie: cookie, 'Content-Type': 'application/json', ...headers }, body: JSON.stringify(body) });
   const result = await post({ text: ' Article. ' });
   assert.equal(result.status, 200);
   assert.deepEqual(await result.json(), { title: '文章主题' });

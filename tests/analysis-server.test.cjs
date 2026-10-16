@@ -3,6 +3,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const http = require('node:http');
+const { createTestAuth, authenticate } = require('./auth-fixture.cjs');
 const modulePromise = import('../translation-server.mjs');
 const secret = 'analysis-test-secret-must-not-leak';
 const config = { key: secret, endpoint: 'https://example.test/chat/completions', model: 'deepseek-flash' };
@@ -40,7 +41,9 @@ async function rejectsWith(promise, status, pattern) {
 async function withServer(run, overrides = {}) {
   const { createServer } = await modulePromise;
   const calls = [];
+  const authService = await createTestAuth();
   const server = createServer({
+    authService,
     translate: async () => ({ translation: '原有译文', model: config.model, cached: false }),
     analyze: async (text, context) => { calls.push({ text, context }); return { analysis: analysis(), model: config.model, cached: false }; },
     ...overrides,
@@ -51,20 +54,21 @@ async function withServer(run, overrides = {}) {
   });
   const port = server.address().port;
   const host = `127.0.0.1:${port}`;
+  let authCookie = '';
   function request(url = '/api/analyze', { method = 'POST', headers = {}, body = '{}' } = {}) {
     return new Promise((resolve, reject) => {
-      const req = http.request({ hostname: '127.0.0.1', port, path: url, method, headers: { Host: host, 'Content-Type': 'application/json', ...headers } }, res => {
+      const req = http.request({ hostname: '127.0.0.1', port, path: url, method, headers: { Host: host, Cookie: authCookie, 'Content-Type': 'application/json', ...headers } }, res => {
         const chunks = [];
         res.on('data', chunk => chunks.push(chunk));
         res.on('error', reject);
         res.on('end', () => resolve({ status: res.statusCode, headers: res.headers, body: Buffer.concat(chunks).toString('utf8') }));
       });
       req.on('error', reject);
-      req.end(body);
+      req.end(['GET', 'HEAD'].includes(method) ? undefined : body);
     });
   }
-  try { await run({ request, calls, host, port }); }
-  finally { await new Promise(resolve => server.close(resolve)); }
+  try { authCookie = await authenticate(request, host); await run({ request, calls, host, port }); }
+  finally { await new Promise(resolve => server.close(resolve)); authService.close(); }
 }
 
 test('analysis input rejects selections without English before any provider request', async () => {

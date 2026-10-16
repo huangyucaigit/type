@@ -1,24 +1,31 @@
 <!doctype html>
-<html lang="zh-CN">
+<html lang="zh-CN" data-auth-required="true">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-  <meta name="description" content="免费的雅思作文打字练习工具，支持导入自己的作文与范文、实时纠错、自定义句子分组默写，并可选中英文查看中文翻译与雅思用法。">
+  <meta name="description" content="免登录体验 24 小时的雅思作文打字练习工具，注册可领取 3–7 天新手券。支持导入范文、实时纠错、分句默写与 AI 英文学习。">
   <meta name="theme-color" content="#f5f5f0">
   <meta property="og:type" content="website">
   <meta property="og:locale" content="zh_CN">
   <meta property="og:site_name" content="火星叔叔的雅思作文打字练习">
-  <meta property="og:title" content="火星叔叔的雅思作文打字练习｜免费英文打字与范文默写">
-  <meta property="og:description" content="用自己的范文，练熟每一句英文。免费导入文章，支持全文模式与分句模式，结合上下文学习英文表达。">
+  <meta property="og:title" content="火星叔叔的雅思作文打字练习｜英文打字与范文默写">
+  <meta property="og:description" content="用自己的范文，练熟每一句英文。免登录体验 24 小时，注册可领 3–7 天新手券，支持全文模式、分句模式与 AI 学习。">
   <meta property="og:url" content="https://type.where.work/">
   <meta name="twitter:card" content="summary">
-  <meta name="twitter:title" content="火星叔叔的雅思作文打字练习｜免费英文打字与范文默写">
-  <meta name="twitter:description" content="用自己的范文，练熟每一句英文。免费导入文章，支持全文模式与分句模式。">
+  <meta name="twitter:title" content="火星叔叔的雅思作文打字练习｜英文打字与范文默写">
+  <meta name="twitter:description" content="用自己的范文，练熟每一句英文。免登录体验 24 小时，注册可领 3–7 天新手券。">
   <link rel="canonical" href="https://type.where.work/">
-  <title>火星叔叔的雅思作文打字练习｜免费英文打字与范文默写</title>
+  <title>火星叔叔的雅思作文打字练习｜英文打字与范文默写</title>
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='17' fill='%23446955'/%3E%3Cpath d='M18 19h28M32 19v29M24 48h16' fill='none' stroke='%23fff' stroke-width='5' stroke-linecap='round'/%3E%3C/svg%3E">
   <link rel="stylesheet" href="styles.css">
   <link rel="stylesheet" href="sentence-mode.css">
+  <link rel="stylesheet" href="auth.css">
+  <link rel="stylesheet" href="starter-wheel.css">
+  <link rel="stylesheet" href="share-card.css">
+  <script src="auth.js" defer></script>
+  <script src="starter-wheel.js" defer></script>
+  <script src="qr-code.js" defer></script>
+  <script src="share-card.js" defer></script>
   <script src="typing-core.js" defer></script>
   <script src="article-history.js" defer></script>
   <script src="sentence-core.js" defer></script>
@@ -27,7 +34,7 @@
   <script src="selection-translation.js" defer></script>
   <script src="app.js" defer></script>
 </head>
-<body>
+<body class="practice-page">
   <div class="page-shell" itemscope itemtype="https://schema.org/WebSite">
     <meta itemprop="name" content="火星叔叔的雅思作文打字练习">
     <meta itemprop="alternateName" content="火星叔叔">
@@ -38,7 +45,7 @@
         <span class="brand-mark" aria-hidden="true">T<span></span></span>
         <span class="brand-name">火星叔叔<span class="brand-description">雅思作文打字练习</span></span>
       </a>
-      <nav class="site-nav" aria-label="网站导航"><a href="./about.html">关于与使用帮助</a><a href="./feedback.html">留言反馈</a></nav>
+      <nav class="site-nav" aria-label="网站导航"><a href="./about.html">关于与使用帮助</a><a href="./feedback.html">留言反馈</a><button id="accountButton" class="account-button" type="button" aria-haspopup="dialog" aria-controls="authDialog">登录 / 注册</button></nav>
     </header>
 
     <main itemprop="mainEntity" itemscope itemtype="https://schema.org/WebApplication">
@@ -46,23 +53,13 @@
       <meta itemprop="applicationCategory" content="EducationalApplication">
       <meta itemprop="operatingSystem" content="Any">
       <meta itemprop="inLanguage" content="zh-CN">
-      <meta itemprop="isAccessibleForFree" content="true">
-      <meta itemprop="description" content="免费的雅思作文打字练习工具，支持导入自己的作文与范文、实时纠错、自定义句子分组默写，并可双击英文查看中文翻译与雅思用法。">
-      <section class="intro" aria-labelledby="page-title">
-        <div class="intro-copy">
-          <div class="intro-heading">
-            <h1 id="page-title" itemprop="name">火星叔叔的雅思作文打字练习</h1>
-            <span class="free-badge" itemprop="offers" itemscope itemtype="https://schema.org/Offer"><meta itemprop="price" content="0"><meta itemprop="priceCurrency" content="CNY">免费使用</span>
-          </div>
-          <p>用自己的范文，练熟每一句英文。</p>
-        </div>
-        <div class="mode-switch" role="group" aria-label="选择练习模式">
-          <button id="realtimeModeButton" class="mode-button" type="button" aria-pressed="true" aria-controls="realtimePanel">全文模式</button>
-          <button id="sentenceModeButton" class="mode-button" type="button" aria-pressed="false" aria-controls="sentencePanel">分句模式</button>
-        </div>
-      </section>
+      <meta itemprop="isAccessibleForFree" content="false">
+      <meta itemprop="description" content="免登录体验 24 小时，注册可领 3–7 天新手券的雅思作文打字练习工具，支持范文导入、全文与分句练习及 AI 英文学习。">
+      <h1 id="page-title" class="practice-title" itemprop="name">火星叔叔的雅思作文打字练习</h1>
+      <p class="practice-subtitle">用自己的范文，练熟每一句英文。</p>
+      <noscript><p class="article-storage-notice">请启用 JavaScript 并通过网站或本地服务访问，以开始免登录体验。</p></noscript>
 
-      <div class="toolbar" aria-label="练习设置">
+      <div class="toolbar" aria-label="文章操作">
         <div class="toolbar-buttons">
           <button id="importButton" class="button button-primary" type="button">
             <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 16V4m-4 4 4-4 4 4M5 14v5a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-5"/></svg>
@@ -74,11 +71,13 @@
             重新练习
           </button>
         </div>
-        <label class="timer-toggle" for="showTimer">
-          <span>显示秒表</span>
-          <input type="checkbox" id="showTimer" checked>
-          <span class="switch-track" aria-hidden="true"></span>
-        </label>
+        <div id="accessStatus" class="access-status">
+          <span id="accessTitle" role="status">免登录体验 24 小时</span>
+          <span id="accessCountdown" hidden></span>
+          <button id="starterWheelEntry" class="starter-wheel-entry" type="button" aria-haspopup="dialog" aria-controls="starterWheelDialog" hidden><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 8v13M4 12v9h16v-9M3 8h18v4H3zM12 8H8a3 3 0 1 1 3-3l1 3Zm0 0h4a3 3 0 1 0-3-3l-1 3Z"/></svg>抽免费时长</button>
+          <button id="accessRetry" class="auth-text-button" type="button" hidden>重试连接</button>
+          <button id="shareButton" class="share-entry" type="button" aria-haspopup="dialog" aria-controls="shareDialog"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 15V3m-4 4 4-4 4 4M5 12v8h14v-8"/></svg>分享</button>
+        </div>
       </div>
 
       <p id="articleStorageNotice" class="article-storage-notice" role="status" hidden></p>
@@ -91,14 +90,11 @@
             <h2 id="articleTitle" lang="en">The value of everyday practice</h2>
             <p id="articleMeta" class="article-meta"></p>
           </div>
-          <div id="timerDisplay" class="timer-display" aria-label="全文模式秒表">
-            <span class="timer-label"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="13" r="8"/><path d="M12 9v5l3 2M9 2h6M12 2v3"/></svg>练习秒表</span>
-            <span id="timerValue" class="timer-value">00:00</span>
-            <span id="timerState" class="timer-state" role="status" aria-live="polite">未开始</span>
-            <div class="timer-controls" role="group" aria-label="全文模式秒表控制">
-              <button id="timerStart" class="timer-button timer-button-start" type="button" aria-label="开始全文模式秒表">开始</button>
-              <button id="timerPause" class="timer-button" type="button" aria-label="暂停全文模式秒表" disabled>暂停</button>
-              <button id="timerClear" class="timer-button" type="button" aria-label="清空全文模式秒表">清空</button>
+          <div class="article-mode-control">
+            <span class="article-mode-label">练习模式</span>
+            <div class="mode-switch" role="group" aria-label="选择练习模式">
+              <button id="realtimeModeButton" class="mode-button" type="button" aria-pressed="true" aria-controls="realtimePanel">全文</button>
+              <button id="sentenceModeButton" class="mode-button" type="button" aria-pressed="false" aria-controls="sentencePanel">分句</button>
             </div>
           </div>
         </div>
@@ -109,7 +105,7 @@
         <div id="typingArea" class="typing-area">
           <div id="textDisplay" class="typing-text" lang="en" tabindex="0" role="document" aria-label="英文范文与输入状态" aria-describedby="typingInstructions translationSelectionHelp"></div>
           <label class="sr-only" for="typingInput">英文打字练习输入区</label>
-          <textarea id="typingInput" class="typing-input" lang="en" spellcheck="false" autocapitalize="off" autocomplete="off" autocorrect="off" aria-describedby="typingInstructions errorHint" aria-details="sourceReadable" wrap="soft"></textarea>
+          <textarea id="typingInput" class="typing-input" lang="en" spellcheck="false" autocapitalize="off" autocomplete="off" autocorrect="off" aria-describedby="typingInstructions errorHint" aria-details="sourceReadable" wrap="soft" readonly></textarea>
         </div>
         <section class="sr-only" aria-label="练习范文原文"><p id="sourceReadable" lang="en"></p></section>
         <div id="feedbackRow" class="feedback-row" hidden>
@@ -141,14 +137,11 @@
               <h2 id="sentenceArticleTitle" lang="en">The value of everyday practice</h2>
               <p id="sentenceMeta" class="article-meta"></p>
             </div>
-            <div id="sentenceTimerDisplay" class="sentence-timer timer-display" aria-label="分句模式秒表">
-              <span class="timer-label"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="13" r="8"/><path d="M12 9v5l3 2M9 2h6M12 2v3"/></svg>练习秒表</span>
-              <span id="sentenceTimerValue" class="timer-value">00:00</span>
-              <span id="sentenceTimerState" class="timer-state" role="status" aria-live="polite">未开始</span>
-              <div class="timer-controls" role="group" aria-label="分句模式秒表控制">
-                <button id="sentenceTimerStart" class="timer-button timer-button-start" type="button" aria-label="开始分句模式秒表">开始</button>
-                <button id="sentenceTimerPause" class="timer-button" type="button" aria-label="暂停分句模式秒表" disabled>暂停</button>
-                <button id="sentenceTimerClear" class="timer-button" type="button" aria-label="清空分句模式秒表">清空</button>
+            <div class="article-mode-control">
+              <span class="article-mode-label">练习模式</span>
+              <div class="mode-switch" role="group" aria-label="选择练习模式">
+                <button id="sentenceFullModeButton" class="mode-button" type="button" aria-pressed="false" aria-controls="realtimePanel">全文</button>
+                <button id="sentenceSplitModeButton" class="mode-button" type="button" aria-pressed="true" aria-controls="sentencePanel">分句</button>
               </div>
             </div>
           </div>
@@ -174,6 +167,67 @@
       </section>
     </main>
   </div>
+
+  <aside id="floatingTimer" class="floating-timer" aria-label="练习秒表">
+    <div id="timerDisplay" class="timer-display" aria-label="全文模式秒表">
+      <span class="timer-label">练习秒表 · 全文</span>
+      <span id="timerValue" class="timer-value">00:00</span>
+      <span id="timerState" class="timer-state" role="status" aria-live="polite">未开始</span>
+      <div class="timer-controls" role="group" aria-label="全文模式秒表控制">
+        <button id="timerStart" class="timer-button timer-button-start" type="button" aria-label="开始全文模式秒表" aria-pressed="false">开始</button>
+        <button id="timerClear" class="timer-button" type="button" aria-label="清空全文模式秒表">清空</button>
+      </div>
+    </div>
+    <div id="sentenceTimerDisplay" class="sentence-timer timer-display" aria-label="分句模式秒表" hidden>
+      <span class="timer-label">练习秒表 · 分句</span>
+      <span id="sentenceTimerValue" class="timer-value">00:00</span>
+      <span id="sentenceTimerState" class="timer-state" role="status" aria-live="polite">未开始</span>
+      <div class="timer-controls" role="group" aria-label="分句模式秒表控制">
+        <button id="sentenceTimerStart" class="timer-button timer-button-start" type="button" aria-label="开始分句模式秒表" aria-pressed="false">开始</button>
+        <button id="sentenceTimerClear" class="timer-button" type="button" aria-label="清空分句模式秒表">清空</button>
+      </div>
+    </div>
+  </aside>
+
+  <dialog id="shareDialog" class="share-dialog" aria-labelledby="shareTitle" aria-describedby="shareDescription shareRules">
+    <div class="dialog-header"><div><span class="auth-eyebrow">把坚持分享出去</span><h2 id="shareTitle">把练习分享给朋友</h2></div><button id="closeShare" class="icon-button" type="button" aria-label="关闭分享卡片"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m6 6 12 12M18 6 6 18"/></svg></button></div>
+    <p id="shareDescription" class="dialog-description">留一句鼓励，也分享一份坚持。</p>
+    <div class="share-preview"><img id="shareImage" alt="火星叔叔雅思作文练习分享卡片" hidden><canvas id="shareCanvas" width="1080" height="1440" hidden></canvas></div>
+    <p id="shareStatus" class="share-note" role="status" aria-live="polite"></p>
+    <label class="share-link-row" for="shareLink"><span class="sr-only">分享链接</span><input id="shareLink" type="text" readonly spellcheck="false" aria-label="分享链接"><button id="copyShareLink" class="button button-secondary" type="button">复制链接</button></label>
+    <div class="share-actions"><button id="saveShareCard" class="button button-primary" type="button">保存卡片</button><button id="shareNative" class="button button-secondary" type="button" hidden>系统分享</button></div>
+    <p id="shareRules" class="share-note"></p>
+    <button id="shareLogin" class="auth-text-button" type="button" hidden>登录后分享，最多获奖 3 次</button>
+  </dialog>
+
+  <dialog id="starterWheelDialog" class="starter-wheel-dialog" aria-labelledby="starterWheelTitle" aria-describedby="starterWheelDescription starterWheelRules">
+    <div class="dialog-header"><div><span class="auth-eyebrow">新手免费礼</span><h2 id="starterWheelTitle">抽一份免费练习时长</h2></div><button id="closeStarterWheel" class="icon-button" type="button" aria-label="关闭抽奖转盘"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m6 6 12 12M18 6 6 18"/></svg></button></div>
+    <p id="starterWheelDescription" class="dialog-description">免费抽一次，注册后领取，必得 3–7 天。</p>
+    <div id="starterWheelVisual" class="starter-wheel-visual" aria-hidden="true">
+      <svg id="starterWheelRotor" class="starter-wheel-rotor" viewBox="0 0 300 300"></svg>
+      <span class="starter-wheel-pointer"></span>
+      <span class="starter-wheel-center"><svg viewBox="0 0 24 24"><path d="M12 8v13M4 12v9h16v-9M3 8h18v4H3zM12 8H8a3 3 0 1 1 3-3l1 3Zm0 0h4a3 3 0 1 0-3-3l-1 3Z"/></svg><span>免费时长</span></span>
+    </div>
+    <p id="starterWheelMessage" class="starter-wheel-message" role="status" aria-live="polite" hidden></p>
+    <button id="starterWheelAction" class="button button-primary starter-wheel-action" type="button">免费抽一次</button>
+    <button id="starterWheelLogin" class="auth-text-button starter-wheel-login" type="button" hidden>已有账号，登录领取</button>
+    <p id="starterWheelRules" class="starter-wheel-rules">3、4、5、6、7 天各 20%。每账号、每浏览器限领一份。</p>
+  </dialog>
+
+  <dialog id="authDialog" class="auth-dialog" aria-labelledby="authTitle" aria-describedby="authDescription">
+    <div class="dialog-header"><div><span class="auth-eyebrow">火星叔叔 · 我的账户</span><h2 id="authTitle">欢迎回来</h2></div><button id="closeAuth" class="icon-button" type="button" aria-label="关闭账户面板"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m6 6 12 12M18 6 6 18"/></svg></button></div>
+    <p id="authDescription" class="dialog-description">注册后可主动领取 3–7 天新手券。</p>
+    <div id="authContent"></div>
+    <p id="authMessage" class="auth-message" role="status" aria-live="polite" hidden></p>
+  </dialog>
+
+  <dialog id="plansDialog" class="plans-dialog" aria-labelledby="plansTitle" aria-describedby="plansDescription">
+    <div class="dialog-header"><div><span class="auth-eyebrow">选择适合你的练习节奏</span><h2 id="plansTitle">同样的功能，不同的时长</h2></div><button id="closePlans" class="icon-button" type="button" aria-label="关闭套餐面板"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m6 6 12 12M18 6 6 18"/></svg></button></div>
+    <p id="plansDescription" class="dialog-description">所有套餐均包含全文与分句练习、范文导入和 AI 学习。试用期间也可完整体验这些功能。</p>
+    <div class="plan-grid"><article class="plan-card"><h3>月度</h3><p class="plan-price"><span>¥</span>9.9<small> / 月</small></p><p>适合集中练习</p></article><article class="plan-card plan-featured"><span class="plan-tag">从容备考</span><h3>季度</h3><p class="plan-price"><span>¥</span>19.9<small> / 季</small></p><p>给进步多一点时间</p></article><article class="plan-card"><h3>年度</h3><p class="plan-price"><span>¥</span>59.9<small> / 年</small></p><p>让练习成为日常</p></article></div>
+    <p class="plans-note">支付功能暂未开放，目前无法购买。免登录体验和时长券均可使用全部功能；时长用完后，文章和当前输入仍可查看、复制。</p>
+    <div class="dialog-footer"><button id="plansTrialAction" class="button button-primary" type="button">注册领 3–7 天</button><button id="plansDone" class="button button-secondary" type="button">知道了</button></div>
+  </dialog>
 
   <div id="selectionLearnAction" class="selection-learn-action" hidden>
     <button id="selectionLearnButton" class="button button-primary selection-learn-button" type="button" aria-haspopup="dialog" aria-controls="selectionTranslationPopup">翻译与学习</button>

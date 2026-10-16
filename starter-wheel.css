@@ -1,0 +1,28 @@
+.starter-wheel-entry{display:inline-flex;align-items:center;gap:5px;border:0;background:none;color:#607e60;padding:3px 0;margin-left:3px;font-size:11px;line-height:1.7;white-space:nowrap;min-height:28px}
+.starter-wheel-entry svg,.starter-wheel-center svg{fill:none;stroke:currentColor;stroke-width:1.6;stroke-linecap:round;stroke-linejoin:round}
+.starter-wheel-entry svg{width:14px;height:14px;flex:none}
+.starter-wheel-entry:hover{text-decoration:underline;text-underline-offset:4px;color:var(--green)}
+.starter-wheel-entry:focus-visible{outline:2px solid #8fac96;outline-offset:4px;border-radius:3px}
+.starter-wheel-entry[hidden]{display:none}
+.starter-wheel-dialog{width:min(420px,calc(100% - 32px));padding:26px}
+.starter-wheel-dialog .dialog-header{gap:12px}
+.starter-wheel-dialog .dialog-header h2{font-size:22px;margin-top:7px}
+.starter-wheel-dialog .icon-button{flex:none}
+.starter-wheel-dialog .dialog-description{margin-bottom:0;line-height:1.9}
+.starter-wheel-visual{position:relative;width:min(276px,100%);aspect-ratio:1;margin:20px auto 22px;isolation:isolate;overflow:clip}
+.starter-wheel-visual[hidden]{display:none}
+.starter-wheel-rotor{display:block;width:100%;height:100%;stroke:none;transform-origin:50% 50%;transition:transform 2.5s cubic-bezier(.12,.67,.13,1);filter:drop-shadow(0 3px 5px #44695510)}
+.starter-wheel-sector{stroke:#fffefa;stroke-width:2}
+.starter-wheel-label{font-size:26px;font-weight:600;font-family:inherit;letter-spacing:0}
+.starter-wheel-label tspan{font-size:12px;font-weight:400}
+.starter-wheel-pointer{position:absolute;top:5px;left:50%;width:18px;height:25px;transform:translateX(-50%);clip-path:polygon(0 0,100% 0,50% 100%);background:var(--green);z-index:2;filter:drop-shadow(0 1px 1px #29362e20)}
+.starter-wheel-center{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);width:78px;height:78px;border:5px solid #f0f3e9;border-radius:50%;background:var(--paper);color:var(--green);display:flex;flex-direction:column;align-items:center;justify-content:center;gap:5px;box-shadow:0 1px 8px #4469550d;font-size:10px;line-height:1.4}
+.starter-wheel-center svg{width:23px;height:23px}
+.starter-wheel-message{margin:0 0 15px;color:#607957;font-size:12px;line-height:1.8;text-align:center;overflow-wrap:anywhere}
+.starter-wheel-message.is-error{color:#b65049}
+.starter-wheel-action{display:flex;width:100%;min-height:44px;font-size:13px}
+.starter-wheel-login{display:block;margin:9px auto 0;text-align:center}
+.starter-wheel-login[hidden]{display:none}
+.starter-wheel-rules{margin:17px 0 0;color:#949e89;font-size:10px;line-height:1.9;text-align:center;overflow-wrap:anywhere}
+@media(max-width:480px){.starter-wheel-dialog{padding:22px 18px;max-height:calc(100dvh - 24px)}.starter-wheel-dialog .dialog-header h2{font-size:20px}.starter-wheel-visual{width:min(260px,100%);margin:18px auto}.starter-wheel-rules{margin-top:14px}}
+@media(prefers-reduced-motion:reduce){.starter-wheel-rotor{transition:none}}

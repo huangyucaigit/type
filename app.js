@@ -4,10 +4,16 @@
   const { normalizeSource, normalizeInput, compare, formatDuration, PracticeClock } = window.TypingCore;
   const $ = (id) => document.getElementById(id);
   const input = $("typingInput");
+  const requiresAuth = document.documentElement?.dataset?.authRequired === "true";
+  const hasAccess = () => window.ZijianAuth ? window.ZijianAuth.hasAccess() : !requiresAuth;
+  const canPractice = () => window.ZijianAuth ? window.ZijianAuth.canPractice() : !requiresAuth;
+  const requireAccess = () => window.ZijianAuth ? window.ZijianAuth.requireAccess() : !requiresAuth;
+  const withAccess = action => window.ZijianAuth ? window.ZijianAuth.runWithAccess(action) : !requiresAuth ? action() : undefined;
   const display = $("textDisplay");
   const dialog = $("importDialog");
   const editor = $("sourceEditor");
   const clock = new PracticeClock();
+  let togglingTimer = false;
   const sample = "Learning a language is a journey that rewards patience and regular practice. Although progress may seem slow at first, small efforts made every day can lead to lasting improvements. Writing, in particular, helps learners organise their thoughts and express ideas with greater confidence.\n\nRather than aiming for perfection, students should focus on building a consistent routine. Reading a well-written article, noticing how its sentences connect, and typing it carefully can all be valuable steps. Over time, familiar words and useful expressions become easier to recall. The most important thing is to keep going, one sentence at a time.";
 
   const history = window.ArticleHistory.create({ getStorage: () => window.localStorage, normalizeText: normalizeSource });
@@ -74,13 +80,13 @@
     getReferenceText: () => source,
     getAdditionalSources: () => activeMode === "sentence" ? sentencePractice?.getLearningSources() || [] : [],
     isPrimaryActive: () => activeMode === "realtime",
-    isActive: () => !dialog.open && !historyDialog.open,
+    isActive: () => canPractice() && !dialog.open && !historyDialog.open && !window.ZijianAuth?.isDialogOpen(),
   });
   const referenceSelection = window.ReferenceSelection?.create({
     input,
     display,
     area: $("typingArea"),
-    isActive: () => activeMode === "realtime" && !dialog.open && !historyDialog.open,
+    isActive: () => activeMode === "realtime" && !dialog.open && !historyDialog.open && !window.ZijianAuth?.isDialogOpen(),
     onResumeInput: () => selectionTranslation?.prepareForInput(),
   });
 
@@ -113,7 +119,7 @@
     for (const article of [...state.articles].reverse()) {
       const card = document.createElement("li");
       card.className = "history-card";
-      const load = button(article.title, () => {
+      const load = button(article.title, () => withAccess(() => {
         let selected = article;
         try { selected = history.select(article.id); storageNotice(); }
         catch { storageNotice("浏览器未能保存这次切换；本次仍可练习，刷新后可能恢复旧文章。"); }
@@ -125,7 +131,7 @@
         historyDialog.close();
         resetPractice(activeMode === "realtime");
         sentencePractice?.setSource(source, articleTitle, articleKind);
-      }, "history-load");
+      }), "history-load");
       load.setAttribute("aria-label", `载入范文：${article.title}`);
       const excerpt = document.createElement("p");
       excerpt.className = "history-excerpt";
@@ -192,6 +198,8 @@
 
   async function generateTitle(article) {
     if (!article || article.titleSource !== "fallback" || titleRequests.has(article.id)) return;
+    if (window.ZijianAuth && !hasAccess() && !await window.ZijianAuth.ensureAccess()) return;
+    if (!window.ZijianAuth && !requireAccess()) return;
     if (window.location?.protocol === "file:") {
       titleErrors.set(article.id, "本地文件模式无法 AI 起名，可直接改名或通过网站访问。");
       if (historyDialog.open && !editingArticleId) renderHistory();
@@ -286,7 +294,10 @@
     const rect = caret.getBoundingClientRect();
     const margin = 90;
     const visibleHeight = window.visualViewport?.height || window.innerHeight;
-    if (rect.top < margin || rect.bottom > visibleHeight - margin) {
+    const timerRect = $("floatingTimer")?.getBoundingClientRect();
+    const overlapsTimer = timerRect?.width > 0 && rect.right >= timerRect.left && rect.left <= timerRect.right;
+    const lowerEdge = overlapsTimer ? Math.min(visibleHeight - margin, timerRect.top - 16) : visibleHeight - margin;
+    if (rect.top < margin || rect.bottom > lowerEdge) {
       window.scrollBy({ top: rect.top - visibleHeight * .45, behavior: "instant" });
     }
     // The overlay owns the page height; native textarea scrolling must not offset its selection.
@@ -297,6 +308,17 @@
   function scheduleCaret() {
     cancelAnimationFrame(caretFrame);
     caretFrame = requestAnimationFrame(() => updateCaret());
+  }
+
+  function keepSentenceInputVisible(event) {
+    if (activeMode !== "sentence" || !event.target.matches?.(".sentence-answer")) return;
+    const timerRect = $("floatingTimer")?.getBoundingClientRect();
+    if (!timerRect || timerRect.width <= 0) return;
+    const rect = event.target.getBoundingClientRect();
+    const overlaps = rect.right > timerRect.left && rect.left < timerRect.right;
+    if (overlaps && timerRect.top > rect.height + 32 && rect.bottom > timerRect.top - 16) {
+      window.scrollBy({ top: rect.bottom - timerRect.top + 16, behavior: "instant" });
+    }
   }
 
   function updateFeedback() {
@@ -326,16 +348,22 @@
   }
 
   function updateTimer() {
-    const value = formatDuration(clock.elapsed());
+    const elapsed = clock.elapsed();
+    const value = formatDuration(elapsed);
+    const timer = $("timerDisplay");
+    timer.setAttribute("data-long-time", String(value.length > 5));
     if (value !== lastTimer) {
       $("timerValue").textContent = value;
       $("timerDisplay").setAttribute("aria-label", `全文模式秒表 ${value}`);
       lastTimer = value;
     }
     const running = clock.state === "running";
-    $("timerStart").disabled = running;
-    $("timerStart").textContent = clock.state === "stopped" ? "继续" : "开始";
-    $("timerPause").disabled = !running;
+    const action = running ? "暂停" : clock.state === "stopped" ? "继续" : "开始";
+    $("timerStart").disabled = togglingTimer;
+    $("timerStart").textContent = action;
+    $("timerStart").setAttribute("aria-label", `${action}全文模式秒表`);
+    $("timerStart").setAttribute("aria-pressed", String(running));
+    $("timerClear").disabled = togglingTimer;
     const state = running ? "计时中" : clock.state === "stopped" ? "已暂停" : "未开始";
     if ($("timerState").textContent !== state) $("timerState").textContent = state;
   }
@@ -364,7 +392,7 @@
     selectionTranslation?.reset();
     referenceSelection?.clear();
     input.value = "";
-    input.readOnly = false;
+    input.readOnly = !canPractice();
     composing = false;
     clock.reset();
     lastTimer = "";
@@ -412,24 +440,29 @@
     $("fileName").textContent = fileTitle ? `${fileTitle}.txt` : "尚未选择文件";
   }
 
-  function selectMode(mode) {
+  function selectMode(mode, moveFocus = false) {
     selectionTranslation?.close();
     referenceSelection?.clear();
     activeMode = mode;
     sentencePractice?.setActive(mode === "sentence");
     $("realtimePanel").hidden = mode !== "realtime";
     $("sentencePanel").hidden = mode !== "sentence";
-    $("realtimeModeButton").setAttribute("aria-pressed", String(mode === "realtime"));
-    $("sentenceModeButton").setAttribute("aria-pressed", String(mode === "sentence"));
+    $("timerDisplay").hidden = mode !== "realtime";
+    $("sentenceTimerDisplay").hidden = mode !== "sentence";
+    ["realtimeModeButton", "sentenceFullModeButton"].forEach(id => $(id)?.setAttribute("aria-pressed", String(mode === "realtime")));
+    ["sentenceModeButton", "sentenceSplitModeButton"].forEach(id => $(id)?.setAttribute("aria-pressed", String(mode === "sentence")));
+    if (moveFocus) $(mode === "realtime" ? "realtimeModeButton" : "sentenceSplitModeButton")?.focus({ preventScroll: true });
   }
 
-  $("realtimeModeButton").addEventListener("click", () => selectMode("realtime"));
-  $("sentenceModeButton").disabled = !sentencePractice;
-  $("sentenceModeButton").addEventListener("click", () => {
-    if (sentencePractice) selectMode("sentence");
+  ["realtimeModeButton", "sentenceFullModeButton"].forEach(id => $(id)?.addEventListener("click", () => selectMode("realtime", true)));
+  ["sentenceModeButton", "sentenceSplitModeButton"].forEach(id => {
+    const button = $(id);
+    if (!button) return;
+    button.disabled = !sentencePractice;
+    button.addEventListener("click", () => { if (sentencePractice) selectMode("sentence", true); });
   });
 
-  $("importButton").addEventListener("click", () => {
+  $("importButton").addEventListener("click", () => withAccess(() => {
     selectionTranslation?.close();
     referenceSelection?.clear();
     cancelFileRead();
@@ -442,7 +475,7 @@
     updatePreview();
     dialog.showModal();
     editor.focus();
-  });
+  }));
   $("closeImport").addEventListener("click", () => dialog.close());
   $("cancelImport").addEventListener("click", () => dialog.close());
   dialog.addEventListener("close", cancelFileRead);
@@ -501,37 +534,40 @@
 
   $("importForm").addEventListener("submit", (event) => {
     event.preventDefault();
-    if (loadingFile) return;
-    const text = normalizeSource(editor.value);
-    if (!text) {
-      importError("请先粘贴文字或选择一个 TXT 文件。");
-      editor.setAttribute("aria-invalid", "true");
-      editor.focus();
-      return;
-    }
-    source = text;
-    const summary = Array.from(source.replace(/\s+/gu, " "));
-    articleTitle = fileTitle.trim() || summary.slice(0, 48).join("") + (summary.length > 48 ? "…" : "");
-    articleKind = "我的范文";
-    const article = saveArticle(editor.value, articleTitle);
-    currentArticleId = article?.id || null;
-    if (article) articleTitle = article.title;
-    dialog.close();
-    resetPractice(activeMode === "realtime");
-    sentencePractice?.setSource(source, articleTitle, "我的范文");
-    if (article?.shouldGenerateTitle) void generateTitle(article);
+    void withAccess(() => {
+      if (loadingFile) return;
+      const text = normalizeSource(editor.value);
+      if (!text) {
+        importError("请先粘贴文字或选择一个 TXT 文件。");
+        editor.setAttribute("aria-invalid", "true");
+        editor.focus();
+        return;
+      }
+      source = text;
+      const summary = Array.from(source.replace(/\s+/gu, " "));
+      articleTitle = fileTitle.trim() || summary.slice(0, 48).join("") + (summary.length > 48 ? "…" : "");
+      articleKind = "我的范文";
+      const article = saveArticle(editor.value, articleTitle);
+      currentArticleId = article?.id || null;
+      if (article) articleTitle = article.title;
+      dialog.close();
+      resetPractice(activeMode === "realtime");
+      sentencePractice?.setSource(source, articleTitle, "我的范文");
+      if (article?.shouldGenerateTitle) void generateTitle(article);
+    });
   });
-  $("restartButton").addEventListener("click", () => {
+  $("restartButton").addEventListener("click", () => withAccess(() => {
     if (activeMode === "sentence") sentencePractice.reset(true);
     else resetPractice();
-  });
-  $("showTimer").addEventListener("change", (event) => {
-    $("timerDisplay").hidden = !event.target.checked;
-    sentencePractice?.setTimerVisible(event.target.checked);
+  }));
+  $("timerStart").addEventListener("click", async () => {
+    if (togglingTimer) return;
+    if (clock.state === "running") { clock.pause(); updateTimer(); return; }
+    togglingTimer = true;
     updateTimer();
+    try { await withAccess(() => { clock.start(); updateTimer(); }); }
+    finally { togglingTimer = false; updateTimer(); }
   });
-  $("timerStart").addEventListener("click", () => { clock.start(); updateTimer(); });
-  $("timerPause").addEventListener("click", () => { clock.pause(); updateTimer(); });
   $("timerClear").addEventListener("click", () => { clock.reset(); updateTimer(); });
   input.addEventListener("input", reconcile);
   input.addEventListener("compositionstart", () => { composing = true; selectionTranslation?.prepareForInput(); referenceSelection?.clear(); });
@@ -540,8 +576,16 @@
   document.addEventListener("selectionchange", () => {
     if (document.activeElement === input) scheduleCaret();
   });
+  document.addEventListener("focusin", keepSentenceInputVisible);
+  document.addEventListener("input", keepSentenceInputVisible);
   window.addEventListener("resize", scheduleCaret);
   document.addEventListener("visibilitychange", updateTimer);
+  window.addEventListener("authchange", () => {
+    const allowed = canPractice();
+    input.readOnly = !allowed || result.completed;
+    if (!allowed) { clock.pause(); updateTimer(); }
+    sentencePractice?.refreshAccess?.();
+  });
   setInterval(() => { updateTimer(); sentencePractice?.refreshTimer(); }, 200);
   selectMode("realtime");
   resetPractice(false);

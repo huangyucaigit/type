@@ -442,6 +442,9 @@
         return cached;
       }
       const promise = (async () => {
+        if (window.ZijianAuth && !window.ZijianAuth.hasAccess() && !await window.ZijianAuth.ensureAccess()) {
+          throw new Error("当前没有可用练习时长，请领取新手券或兑换时长券。已选文字会保留。");
+        }
         let response;
         try {
           response = await window.fetch("/api/analyze", {

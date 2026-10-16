@@ -12,6 +12,7 @@ services:
     environment:
       ZIJIAN_HOST: 0.0.0.0
       ZIJIAN_FEEDBACK_DATA_DIR: /data
+      ZIJIAN_AUTH_DATA_DIR: /data
       ZIJIAN_TRUST_PROXY: "1"
       ZIJIAN_PUBLIC_ORIGINS: http://47.106.182.159,http://type.where.work,https://type.where.work,http://127.0.0.1,http://localhost
     volumes:
