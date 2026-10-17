@@ -12,12 +12,26 @@ const order = (extra = {}) => ({ orderNo: 'TYPE-ORDER-123', planId: 'monthly', p
   codeUrl: 'weixin://wxpay/bizpayurl?pr=mock-safe', createdAt: NOW, expiresAt: NOW + 600000, mode: 'mock', ...extra });
 const deferred = () => { let resolve, reject; const promise = new Promise((yes, no) => { resolve = yes; reject = no; }); return { promise, resolve, reject }; };
 const flush = () => new Promise(resolve => setImmediate(resolve));
+
+test('legacy crypto generates valid distinct v4 UUIDs and stale invalid intents are replaced', async () => {
+  const { requestUuid } = require('../billing.js');
+  const { webcrypto } = require('node:crypto');
+  const legacy = { getRandomValues: webcrypto.getRandomValues.bind(webcrypto) };
+  const ids = Array.from({ length: 100 }, () => requestUuid(legacy));
+  for (const id of ids) assert.match(id, /^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/);
+  assert.equal(new Set(ids).size, 100);
+  const page = harness({ uuid: () => requestUuid(legacy) });
+  page.values.set('zijian-billing-pending:1', JSON.stringify({ planId: 'monthly', requestId: 'billing-123456789012-old' }));
+  await page.controller.open('monthly');
+  const create = page.calls.find(call => call.path === '/api/billing/orders' && call.body);
+  assert.match(create.body.requestId, /^[a-f0-9-]{36}$/);
+});
 function harness(overrides = {}) {
   let state = user(1), uuidCalls = 0;
   const calls = [], changes = [], values = new Map();
   const storage = { getItem: key => values.get(key) || null, setItem: (key, value) => values.set(key, value), removeItem: key => values.delete(key) };
   const options = { getState: () => state, ready: async () => {}, storage, now: () => NOW,
-    uuid: () => `client-uuid-0000000${++uuidCalls}`, onChange: view => changes.push(view),
+    uuid: () => `00000000-0000-4000-8000-${String(++uuidCalls).padStart(12, '0')}`, onChange: view => changes.push(view),
     request: async (path, body) => { calls.push({ path, body });
       if (path === '/api/billing/plans') return config();
       if (path === '/api/billing/orders' && body === undefined) return { ...config(), orders: [order()] };
@@ -71,10 +85,10 @@ test('disabled or unavailable payment never creates an order', async () => {
 test('a purchase uses only plan ID plus a stable client request ID, never client amount or duration', async () => {
   const page = harness(); await page.controller.open('monthly');
   const request = page.calls.find(call => call.body);
-  assert.deepEqual(request.body, { planId: 'monthly', requestId: 'client-uuid-00000001' });
+  assert.deepEqual(request.body, { planId: 'monthly', requestId: '00000000-0000-4000-8000-000000000001' });
   assert.equal(page.controller.snapshot().order.amountFen, 990);
   const stored = JSON.parse(page.values.get('zijian-billing-pending:1'));
-  assert.deepEqual(stored, { planId: 'monthly', requestId: 'client-uuid-00000001', orderNo: 'TYPE-ORDER-123' });
+  assert.deepEqual(stored, { planId: 'monthly', requestId: '00000000-0000-4000-8000-000000000001', orderNo: 'TYPE-ORDER-123' });
 });
 
 test('a lost create response retries exactly the same purchase intent', async () => {

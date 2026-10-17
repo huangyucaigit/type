@@ -41,6 +41,33 @@ function submission(session, overrides = {}) {
   return { cookie: session.cookie, csrfToken: session.csrfToken, fingerprint, message: validMessage, ...overrides };
 }
 
+test('read bursts are bounded and cached snapshots stay fresh across writers and external changes', async t => {
+  const { store, filePath, now } = await fixture(t);
+  const session = await store.read({ fingerprint });
+  const results = await Promise.allSettled(Array.from({ length: 200 }, () => store.read()));
+  assert.equal(results.filter(item => item.status === 'fulfilled').length, 64);
+  assert.ok(results.filter(item => item.status === 'rejected').every(item => item.reason.status === 429));
+  const { createFeedbackStore } = await modulePromise;
+  const other = createFeedbackStore({ filePath, now });
+  const posted = await other.submit(submission(session));
+  assert.equal((await store.read({ cookie: session.cookie, fingerprint })).messages[0].id, posted.message.id);
+  assert.equal((await store.read({ cookie: session.cookie, fingerprint })).canSubmit, false);
+  await fs.writeFile(filePath, '{corrupted externally');
+  await rejectsWith(store.read(), 503);
+});
+
+test('a store that reused a cached snapshot fails closed if its backing file disappears', async t => {
+  const { store, filePath, now } = await fixture(t);
+  await store.read();
+  await store.read();
+  const { createFeedbackStore } = await modulePromise;
+  const reopened = createFeedbackStore({ filePath, now });
+  await reopened.read();
+  await fs.unlink(filePath);
+  await rejectsWith(reopened.read(), 503);
+  await assert.rejects(fs.stat(filePath), { code: 'ENOENT' });
+});
+
 test('read provisions an anonymous signed identity and exposes only public message fields', async t => {
   const { store, filePath } = await fixture(t);
   const initial = await store.read();

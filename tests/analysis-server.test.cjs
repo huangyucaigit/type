@@ -299,7 +299,7 @@ test('analysis endpoint rejects irrelevant and malformed input before invoking t
     assert.equal((await request('/api/analyze', { body: JSON.stringify({ text: 'word', context: { sentence: 'a'.repeat(4001) } }) })).status, 413);
     assert.equal((await request('/api/analyze', { body: JSON.stringify({ text: 'a'.repeat(80001) }) })).status, 413);
     assert.equal(calls.length, 0);
-  });
+  }, { aiRateLimiter: { check() {} } });
 });
 
 test('analysis endpoint rejects foreign pages, methods and content types without requests', async () => {
@@ -319,7 +319,7 @@ test('analysis backend prompts, credentials and tests remain outside the static 
   await withServer(async ({ request, calls }) => {
     for (const url of ['/analysis-prompts.mjs', '/translation-server.mjs', '/.env', '/tests/analysis-server.test.cjs', '/%2e%2e/.env']) {
       const result = await request(url, { method: 'GET', body: '' });
-      assert.equal(result.status, 404);
+      assert.ok([400, 404].includes(result.status), url);
       assert.ok(!result.body.includes(secret));
     }
     assert.equal(calls.length, 0);

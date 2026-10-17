@@ -1,11 +1,14 @@
 import { randomBytes, randomUUID, createHmac, timingSafeEqual } from 'node:crypto';
-import { readFile, mkdir, open, rename, unlink } from 'node:fs/promises';
+import { readFile, mkdir, open, rename, unlink, stat } from 'node:fs/promises';
 import path from 'node:path';
 
 const DAY_MS = 86400000;
 const SHANGHAI_OFFSET = 8 * 60 * 60 * 1000;
 const PAGE_SIZE = 20;
 const queues = new Map();
+const queuedCounts = new Map();
+const snapshots = new Map();
+let queuedTotal = 0;
 const HASH_PATTERN = /^[a-f0-9]{64}$/;
 const ID_PATTERN = /^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/;
 const MESSAGE_FIELDS = ['id', 'nickname', 'message', 'createdAt'];
@@ -139,6 +142,7 @@ export function createFeedbackStore({ filePath, now = Date.now, maxMessages = 20
       await handle.close();
       handle = undefined;
       await rename(tempPath, filePath);
+      snapshots.delete(filePath);
     } catch {
       throw unavailable();
     } finally {
@@ -147,9 +151,19 @@ export function createFeedbackStore({ filePath, now = Date.now, maxMessages = 20
     }
   }
 
-  async function load() {
+  async function load(writable = false) {
     let raw;
-    try { raw = await readFile(filePath, 'utf8'); }
+    let signature;
+    try {
+      const info = await stat(filePath, { bigint: true });
+      signature = `${info.dev}:${info.ino}:${info.size}:${info.mtimeNs}:${info.ctimeNs}`;
+      const cached = snapshots.get(filePath);
+      if (cached?.signature === signature) {
+        initialized = true;
+        return writable ? structuredClone(cached.state) : cached.state;
+      }
+      raw = await readFile(filePath, 'utf8');
+    }
     catch (error) {
       if (error.code !== 'ENOENT' || initialized) throw unavailable();
       const state = { version: 1, secret: randomBytes(32).toString('base64url'), messages: [], quotas: {} };
@@ -161,15 +175,25 @@ export function createFeedbackStore({ filePath, now = Date.now, maxMessages = 20
     try { state = validateState(JSON.parse(raw)); }
     catch { throw unavailable(); }
     initialized = true;
-    return state;
+    if (snapshots.size >= 100) snapshots.delete(snapshots.keys().next().value);
+    snapshots.set(filePath, { signature, state });
+    return writable ? structuredClone(state) : state;
   }
 
   function serialized(operation) {
+    if (queuedTotal >= 512 || (queuedCounts.get(filePath) || 0) >= 64) return Promise.reject(new FeedbackError(429, '留言请求较多，请稍后重试。', { retryAfter: 1 }));
+    queuedTotal++;
+    queuedCounts.set(filePath, (queuedCounts.get(filePath) || 0) + 1);
     const previous = queues.get(filePath) || Promise.resolve();
     const current = previous.catch(() => {}).then(operation);
     const tail = current.then(() => {}, () => {});
     queues.set(filePath, tail);
-    tail.then(() => { if (queues.get(filePath) === tail) queues.delete(filePath); });
+    tail.then(() => {
+      queuedTotal--;
+      const count = queuedCounts.get(filePath) - 1;
+      if (count) queuedCounts.set(filePath, count); else queuedCounts.delete(filePath);
+      if (queues.get(filePath) === tail) queues.delete(filePath);
+    });
     return current.catch(error => { throw error instanceof FeedbackError ? error : unavailable(); });
   }
 
@@ -198,7 +222,11 @@ export function createFeedbackStore({ filePath, now = Date.now, maxMessages = 20
         if (typeof cursor !== 'string' || (cursor && !ID_PATTERN.test(cursor))) throw new FeedbackError(400, '留言分页位置无效，请刷新后重试。');
         const state = await load();
         const timing = calendar(Number(now()));
-        if (prune(state, timing)) await persist(state);
+        if (Object.keys(state.quotas).some(day => day !== timing.day && day !== timing.previousDay)) {
+          const pruned = structuredClone(state);
+          prune(pruned, timing);
+          await persist(pruned);
+        }
         const id = cookieIdentity(cookie, state.secret) || randomBytes(24).toString('hex');
         const messages = state.messages.slice(-maxMessages).reverse();
         const offset = cursor ? messages.findIndex(item => item.id === cursor) + 1 : 0;
@@ -220,7 +248,7 @@ export function createFeedbackStore({ filePath, now = Date.now, maxMessages = 20
       return serialized(async () => {
         fingerprint = fingerprintValue(fingerprint, true);
         const normalized = content({ nickname, message, website });
-        const state = await load();
+        const state = await load(true);
         const timestamp = Number(now());
         const timing = calendar(timestamp);
         const id = cookieIdentity(cookie, state.secret);

@@ -72,7 +72,7 @@ test('review route rejects blank, non-English and oversize groups or drafts befo
     for (const body of ['null', '[]', '4', '"text"', '{']) assert.equal((await request('/api/review', { body })).status, 400);
     assert.equal((await request('/api/review', { body: JSON.stringify({ ...sample, unused: 'a'.repeat(150001) }) })).status, 413);
     assert.equal(calls.length, 0);
-  });
+  }, { aiRateLimiter: { check() {} } });
 });
 
 test('review route enforces methods, JSON content type and approved origins before model use', async () => {

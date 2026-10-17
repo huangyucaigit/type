@@ -330,10 +330,12 @@ function feedbackCookie(request) {
   return value ? value.trim().slice('mars_feedback='.length) : '';
 }
 
-export function createServer({ translate, analyze, review, titleArticle, config, configured = true, publicOrigins = [], feedbackStore, trustProxy = false, feedbackRateLimiter, authService, authProviders, authFilename, paymentOptions, paymentNotificationLogger = entry => console.info(JSON.stringify(entry)) } = {}) {
+export function createServer({ translate, analyze, review, titleArticle, config, configured = true, publicOrigins = [], feedbackStore, trustProxy = false, feedbackRateLimiter, aiRateLimiter, authService, authProviders, authFilename, paymentOptions, paymentNotificationLogger = entry => console.info(JSON.stringify(entry)) } = {}) {
   publicOrigins = publicOrigins.map(normalizePublicOrigin);
   feedbackStore ||= createFeedbackStore({ filePath: path.join(process.env.ZIJIAN_FEEDBACK_DATA_DIR || path.join(ROOT, '.data'), 'feedback.json') });
   feedbackRateLimiter ||= createFeedbackRateLimiter();
+  const feedbackReadLimiter = createFeedbackRateLimiter({ maxAttempts: 60 });
+  aiRateLimiter ||= createFeedbackRateLimiter({ maxAttempts: 10 });
   const limiter = createRequestLimiter();
   translate ||= createTranslator({ ...(config ? { config } : {}), limiter });
   analyze ||= createAnalyzer({ ...(config ? { config } : {}), limiter });
@@ -357,10 +359,19 @@ export function createServer({ translate, analyze, review, titleArticle, config,
       return json(response, 403, { error: '请通过已配置的网站地址访问，并从该网页发起请求。' });
     }
     let pathname;
-    try { pathname = new URL(request.url, `http://${host}`).pathname; }
+    try {
+      // Route only canonical origin-form paths. Never reinterpret a raw target
+      // as an authority or normalize an alternative path past proxy limits.
+      const rawPath = request.url.split('?')[0];
+      pathname = new URL(request.url, `http://${host}`).pathname;
+      if (!rawPath.startsWith('/') || rawPath.startsWith('//') || rawPath.includes('\\') || rawPath.includes('%') || rawPath.includes('//') || pathname !== rawPath) throw new Error('Noncanonical path');
+    }
     catch { return json(response, 400, { error: '请求地址无效。' }); }
     try {
       const secure = Boolean(request.socket.encrypted) || (trustProxy && request.headers['x-forwarded-proto'] === 'https');
+      const forwardedIp = request.headers['x-real-ip'];
+      const remoteIp = trustProxy && typeof forwardedIp === 'string' && isIP(forwardedIp) ? forwardedIp : request.socket.remoteAddress;
+      if (['/api/translate', '/api/analyze', '/api/review', '/api/article-title'].includes(pathname) && request.method === 'POST') aiRateLimiter.check(remoteIp);
       const hostname = new URL(`http://${host}`).hostname;
       const billingRoute = pathname.startsWith('/api/billing/');
       const paymentNotification = pathname === '/payments/notify';
@@ -410,6 +421,7 @@ export function createServer({ translate, analyze, review, titleArticle, config,
       }
       if (pathname === '/api/feedback') {
         if (request.method === 'GET') {
+          feedbackReadLimiter.check(remoteIp);
           const query = new URL(request.url, `http://${host}`).searchParams;
           const state = await feedbackStore.read({ cookie: feedbackCookie(request), fingerprint: request.headers['x-browser-fingerprint'] || '', cursor: query.get('cursor') || '' });
           const { cookie, ...publicState } = state;

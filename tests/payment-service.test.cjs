@@ -80,6 +80,36 @@ async function setup(t, options = {}) {
 
 async function registered(h) { const c = h.client(); await c.init(); await c.register(); return c; }
 
+test('concurrent order reads coalesce, reads are limited and mutation queues stay bounded', async t => {
+  let gated = false, upstream = 0, release;
+  let gate = new Promise(resolve => { release = resolve; });
+  t.after(() => release());
+  const h = await setup(t, { paymentOptions: { mode: 'mock', mockOptions: { beforeRequest: async ({ rawTarget }) => {
+    if (gated && rawTarget.startsWith('/api/v1/payments/')) { upstream++; await gate; }
+  } } } });
+  const c = await registered(h), order = (await c.create()).order;
+  gated = true;
+  const results = Array.from({ length: 150 }, () => c.detail(order.orderNo).then(() => 'ok', error => error.code));
+  for (let i = 0; i < 100 && !upstream; i++) await new Promise(resolve => setImmediate(resolve));
+  assert.equal(upstream, 1);
+  release();
+  const outcomes = await Promise.all(results);
+  assert.equal(outcomes.filter(value => value === 'ok').length, 60);
+  assert.equal(outcomes.filter(value => value === 'RATE_LIMITED').length, 90);
+  assert.equal(upstream, 1);
+  h.advance(60001);
+  assert.equal((await c.detail(order.orderNo)).order.orderNo, order.orderNo);
+
+  upstream = 0; gate = new Promise(resolve => { release = resolve; });
+  const actions = Array.from({ length: 100 }, () => c.action(order.orderNo, 'sync').then(() => 'ok', error => error.code));
+  for (let i = 0; i < 100 && !upstream; i++) await new Promise(resolve => setImmediate(resolve));
+  assert.equal(upstream, 1);
+  release();
+  const actionOutcomes = await Promise.all(actions);
+  assert.equal(actionOutcomes.filter(value => value === 'ok').length, 8);
+  assert.equal(actionOutcomes.filter(value => value === 'RATE_LIMITED').length, 92);
+});
+
 function raceWorkers(h, workItems) {
   const shared = new SharedArrayBuffer(4), moduleUrl = pathToFileURL(path.resolve(__dirname, '../auth-service.mjs')).href;
   return Promise.all(workItems.map(work => new Promise((resolve, reject) => {

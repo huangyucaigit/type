@@ -6,7 +6,7 @@ const http = require('node:http');
 const { createTestAuth } = require('./auth-fixture.cjs');
 
 async function fixture(t, options = {}) {
-  const { createServer } = await import('../translation-server.mjs');
+  const { createServer, createFeedbackRateLimiter } = await import('../translation-server.mjs');
   let timestamp = Date.UTC(2026, 9, 16, 0, 0, 0);
   const messages = [], sms = [], aiCalls = [];
   const authService = await createTestAuth({ now: () => timestamp, providers: {
@@ -16,6 +16,7 @@ async function fixture(t, options = {}) {
     sendBindEmail: async data => { messages.push(data); },
   } });
   const server = createServer({ authService,
+    aiRateLimiter: createFeedbackRateLimiter({ now: () => timestamp }),
     translate: async text => { aiCalls.push('translate'); return { translation: text }; },
     analyze: async () => { aiCalls.push('analyze'); return { analysis: {} }; },
     review: async () => { aiCalls.push('review'); return { review: {} }; },

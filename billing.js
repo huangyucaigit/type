@@ -40,7 +40,7 @@
       try {
         const value = JSON.parse(options.storage?.getItem(storageKey(id)) || 'null');
         if (value && PLAN_IDS.includes(value.planId) && typeof value.requestId === 'string'
-          && /^[A-Za-z0-9_-]{16,100}$/.test(value.requestId)
+          && /^[a-f0-9]{8}-[a-f0-9]{4}-[1-8][a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/i.test(value.requestId)
           && (!value.orderNo || /^[A-Za-z0-9_-]{1,100}$/.test(value.orderNo))) return value;
       } catch { /* Storage is an optional recovery aid. */ }
       return null;
@@ -151,6 +151,15 @@
     };
   }
 
+  function requestUuid(crypto) {
+    if (crypto?.randomUUID) return crypto.randomUUID();
+    const bytes = crypto.getRandomValues(new Uint8Array(16));
+    bytes[6] = (bytes[6] & 15) | 64;
+    bytes[8] = (bytes[8] & 63) | 128;
+    const hex = Array.from(bytes, byte => byte.toString(16).padStart(2, '0')).join('');
+    return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
+  }
+
   function mount(window) {
     const document = window.document, $ = id => document.getElementById(id);
     const dialog = $('billingDialog'), content = $('billingContent');
@@ -174,7 +183,7 @@
     const controller = createController({
       getState: () => auth()?.getState?.() || {}, ready: () => auth()?.ready,
       request: (path, body) => auth().billingRequest(path, body), storage,
-      uuid: () => window.crypto?.randomUUID?.() || `billing-${Date.now()}-${Math.random().toString(36).slice(2, 16)}`,
+      uuid: () => requestUuid(window.crypto),
       onChange: render,
     });
     function qrImage(codeUrl) {
@@ -313,5 +322,5 @@
     Promise.resolve(auth()?.ready).then(() => controller.metadata());
     return controller;
   }
-  return { PLAN_IDS, amount, orderView, createController, mount };
+  return { PLAN_IDS, amount, orderView, createController, requestUuid, mount };
 });

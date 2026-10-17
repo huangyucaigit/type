@@ -91,6 +91,20 @@ test('translation config accepts current and existing key/address aliases withou
   assert.equal(readConfig({}).key, '');
 });
 
+test('raw alternate paths cannot reach AI and canonical requests have an application rate limit', async () => {
+  await withServer(async ({ request, requests }) => {
+    const post = target => request(target, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ text: 'Hello.' }) });
+    for (const target of ['//route-bypass/api/translate', '/api\\translate', '/prefix/../api/translate', '/%61pi/translate', '/api//translate']) {
+      assert.equal((await post(target)).status, 400, target);
+    }
+    assert.equal(requests.length, 0);
+    for (let i = 0; i < 10; i++) assert.equal((await post('/api/translate')).status, 200);
+    assert.equal((await post('/api/translate')).status, 429);
+    assert.equal(requests.length, 10);
+    assert.equal((await request('/api/status')).status, 200);
+  });
+});
+
 test('translation config rejects unsafe or malformed endpoint values with a safe diagnostic', async () => {
   const { readConfig, TranslationError } = await modulePromise;
   for (const url of ['http://example.test', 'not a url', `https://${secret}@example.test`, `https://example.test?key=${secret}`, `https://example.test/#${secret}`]) {
@@ -280,7 +294,7 @@ test('local server never serves credentials, backend source, tests or traversal 
   await withServer(async ({ request, requests }) => {
     for (const url of ['/.env', '/.env.example', '/translation-server.mjs', '/payment-client.mjs', '/payment-config.mjs', '/payment-mock.mjs', '/payment-admin.mjs', '/auth-service.mjs', '/.deploy/pay-project.private.json', '/AliyunSMSAccessKey.csv', '/tests/translation-server.test.cjs', '/../.env', '/%2e%2e/.env', '/%2eenv', '/%2Eenv', '/..%2f.env', '/%2e%2e%5c.env', '/index.html/../../.env', '/.git/config', '/start-translation.cmd']) {
       const response = await request(url);
-      assert.equal(response.status, 404, url);
+      assert.ok([400, 404].includes(response.status), url);
       assert.ok(!response.body.includes(secret));
       assert.match(response.headers['content-type'], /application\/json/);
     }
@@ -382,7 +396,7 @@ test('local server validates method, content type, JSON structure, text and body
     const valid = await send(JSON.stringify({ text: 'First sentence.\n\nSecond sentence.' }), 'application/json; charset=utf-8');
     assert.equal(valid.status, 200);
     assert.deepEqual(JSON.parse(valid.body), { translation: '译文：First sentence.\n\nSecond sentence.', model: 'deepseek-flash', cached: false });
-  });
+  }, { aiRateLimiter: { check() {} } });
 });
 
 test('local server contains unexpected failures and forwards only intentional public errors', async () => {

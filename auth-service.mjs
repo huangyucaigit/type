@@ -265,6 +265,18 @@ export function createAuthService({ filename = path.join(process.env.ZIJIAN_AUTH
   const paymentClient = paymentMode === 'disabled' ? null : createPaymentClient({ config: paymentConfig,
     now: time, ...(mockProvider ? { fetchImpl: mockProvider.fetchImpl } : paymentOptions.fetchImpl ? { fetchImpl: paymentOptions.fetchImpl } : {}) });
   const billingLocks = new Map();
+  const billingRefreshes = new Map();
+  let billingPending = 0;
+  const readRates = new Map();
+
+  function readRate(scope, key, limit) {
+    const timestamp = time(), id = `${scope}:${key || 'unknown'}`;
+    for (const [entry, value] of readRates) if (value.until <= timestamp) readRates.delete(entry);
+    let value = readRates.get(id);
+    if (!value && readRates.size < 10000) readRates.set(id, value = { count: 0, until: timestamp + 60000 });
+    if (!value || value.count >= limit) throw new AuthError(429, '查询过于频繁，请稍后重试。', 'RATE_LIMITED', 60);
+    value.count++;
+  }
 
   function time() {
     const timestamp = now();
@@ -356,7 +368,8 @@ export function createAuthService({ filename = path.join(process.env.ZIJIAN_AUTH
   }
   function state(request, deviceId, timestamp, message) {
     const user = sessionUser(request, timestamp);
-    if (user) rememberAccountBrowser(user.id, deviceId, guestRecord(deviceId), timestamp);
+    const guest = guestRecord(deviceId);
+    if (user && guest) rememberAccountBrowser(user.id, deviceId, guest, timestamp);
     return {
       user: user ? { id: user.id, email: user.email, phone: user.phone, emailVerified: Boolean(user.email_verified) } : null,
       entitlement: entitlement(user, deviceId, timestamp), guest: guestState(deviceId, timestamp), starter: starterState(user, deviceId, timestamp), starterDraw: starterDrawState(user, deviceId, timestamp), serverTime: timestamp,
@@ -441,6 +454,10 @@ export function createAuthService({ filename = path.join(process.env.ZIJIAN_AUTH
     return Object.prototype.hasOwnProperty.call(body, 'fingerprint') ? resolveGuest(deviceId, fingerprintOf(body, request, clientIp)) : guestRecord(deviceId);
   }
   function rememberAccountBrowser(userId, deviceId, guest, timestamp) {
+    const previous = db.prepare('SELECT guest_id FROM access_referral_accounts WHERE user_id=? AND device_hash=?').get(userId, deviceHashOf(deviceId));
+    if (previous && (!guest || previous.guest_id === guest.id)) return;
+    // Retain old anti-abuse associations rather than evicting them on each new device.
+    if (!previous && db.prepare('SELECT count(*) AS count FROM access_referral_accounts WHERE user_id=?').get(userId).count >= 100) return;
     db.prepare(`INSERT INTO access_referral_accounts (user_id,device_hash,guest_id,seen_at) VALUES (?,?,?,?)
       ON CONFLICT(user_id,device_hash) DO UPDATE SET guest_id=coalesce(excluded.guest_id,access_referral_accounts.guest_id),seen_at=excluded.seen_at`).run(userId, deviceHashOf(deviceId), guest?.id ?? null, timestamp);
   }
@@ -560,14 +577,24 @@ export function createAuthService({ filename = path.join(process.env.ZIJIAN_AUTH
     return { ...state(request, deviceId, time()), billing: billingMetadata(allowMock), plans: BILLING_PLANS, ...extra };
   }
   async function orderLock(orderNo, operation) {
-    const previous = billingLocks.get(orderNo) || Promise.resolve();
+    const entry = billingLocks.get(orderNo);
+    if (billingPending >= 256 || (entry?.count || 0) >= 8) throw new AuthError(429, '订单正在处理中，请稍后查询。', 'RATE_LIMITED', 3);
+    const previous = entry?.tail || Promise.resolve();
     let unlock;
     const gate = new Promise(resolve => { unlock = resolve; });
     const next = previous.catch(() => {}).then(() => gate);
-    billingLocks.set(orderNo, next);
+    const lock = entry || { count: 0, tail: null };
+    lock.count++; billingPending++; lock.tail = next;
+    billingLocks.set(orderNo, lock);
     await previous.catch(() => {});
     try { return await operation(); }
-    finally { unlock(); if (billingLocks.get(orderNo) === next) billingLocks.delete(orderNo); }
+    finally { unlock(); lock.count--; billingPending--; if (!lock.count) billingLocks.delete(orderNo); }
+  }
+  function refreshOrder(orderNo) {
+    if (billingRefreshes.has(orderNo)) return billingRefreshes.get(orderNo);
+    const pending = orderLock(orderNo, () => obtainPayment(orderNo)).finally(() => billingRefreshes.delete(orderNo));
+    billingRefreshes.set(orderNo, pending);
+    return pending;
   }
   function assertOrderMode(row) {
     if (row.mode !== paymentMode) throw new AuthError(409, '此订单属于另一支付环境，请查看当前环境的订单。', 'PAYMENT_MODE_MISMATCH');
@@ -757,6 +784,7 @@ export function createAuthService({ filename = path.join(process.env.ZIJIAN_AUTH
     });
   }
   async function handleBilling({ request, response, pathname, body, deviceId, secure, clientIp, allowMock }) {
+    if (request.method === 'GET') readRate('billing-ip', clientIp, 120);
     if (request.method === 'GET' && pathname === '/api/billing/plans') {
       if (!deviceId) {
         deviceId = randomBytes(32).toString('base64url');
@@ -766,6 +794,7 @@ export function createAuthService({ filename = path.join(process.env.ZIJIAN_AUTH
     }
     ensureBilling(allowMock);
     const user = requireUser(request, time());
+    if (request.method === 'GET') readRate('billing-user', user.id, 60);
     const route = /^\/api\/billing\/orders(?:\/([A-Za-z0-9_-]{1,64})(?:\/(sync|close|retry|mock-complete|mock-notify-retry))?)?$/.exec(pathname);
     if (!route) throw new AuthError(404, '接口不存在。', 'NOT_FOUND');
     const orderNo = route[1], action = route[2];
@@ -776,7 +805,7 @@ export function createAuthService({ filename = path.join(process.env.ZIJIAN_AUTH
       }
       const row = findOrder(orderNo, user.id);
       const recovered = row.mode === paymentMode && row.status !== 'PAID'
-        ? await orderLock(orderNo, () => obtainPayment(orderNo)) : row;
+        ? await refreshOrder(orderNo) : row;
       return billingResult(request, deviceId, allowMock, { order: orderView(recovered) });
     }
     if (request.method !== 'POST' || (orderNo && !action) || (!orderNo && action)) throw new AuthError(405, '请求方法不受支持。', 'METHOD_NOT_ALLOWED');
@@ -856,6 +885,7 @@ export function createAuthService({ filename = path.join(process.env.ZIJIAN_AUTH
     let deviceId = deviceIdentity(request);
     if (pathname.startsWith('/api/billing/')) return handleBilling({ request, response, pathname, body, deviceId, secure, clientIp, allowMock });
     if (request.method === 'GET' && pathname === '/api/auth/session') {
+      readRate('session-ip', clientIp, 120);
       if (!deviceId) {
         deviceId = randomBytes(32).toString('base64url');
         setCookie(response, DEVICE_COOKIE, `${deviceId}.${mac(`device:${deviceId}`)}`, timestamp + SESSION_MS, secure, timestamp);
@@ -1037,7 +1067,8 @@ export function createAuthService({ filename = path.join(process.env.ZIJIAN_AUTH
       rate('bind-email-user', user.id, 3, 3600000, timestamp);
       const occupied = db.prepare('SELECT id FROM auth_users WHERE email=?').get(email);
       if (occupied && occupied.id !== user.id) throw new AuthError(409, '该邮箱已属于其他账号，请使用原账号登录。', 'EMAIL_IN_USE');
-      const encoded = await passwordHash(password), token = randomBytes(32).toString('base64url'), tokenHash = hash(token);
+      if (user.password_hash && !await passwordMatches(password, user.password_hash)) throw new AuthError(401, '当前密码错误。', 'INVALID_CREDENTIALS');
+      const encoded = user.password_hash || await passwordHash(password), token = randomBytes(32).toString('base64url'), tokenHash = hash(token);
       transaction(() => {
         const current = requireUser(request, time());
         if (current.id !== user.id || current.password_hash !== user.password_hash || current.email !== user.email || current.email_verified !== user.email_verified) {
@@ -1063,7 +1094,7 @@ export function createAuthService({ filename = path.join(process.env.ZIJIAN_AUTH
         if (!user || (user.email && user.email !== token.email)) throw new AuthError(400, '链接无效或已过期，请重新申请。', 'INVALID_TOKEN');
         const occupied = db.prepare('SELECT id FROM auth_users WHERE email=?').get(token.email);
         if (occupied && occupied.id !== user.id) throw new AuthError(409, '该邮箱已属于其他账号，请使用原账号登录。', 'EMAIL_IN_USE');
-        db.prepare('UPDATE auth_users SET email=?,password_hash=?,email_verified=1 WHERE id=?').run(token.email, token.password_hash, user.id);
+        db.prepare('UPDATE auth_users SET email=?,password_hash=?,email_verified=1 WHERE id=?').run(token.email, user.password_hash || token.password_hash, user.id);
         db.prepare('DELETE FROM auth_tokens WHERE user_id=?').run(user.id);
         const currentTokenHash = hash(cookies(request)[SESSION_COOKIE]);
         db.prepare('DELETE FROM auth_sessions WHERE user_id=? AND token_hash<>?').run(user.id, currentTokenHash);

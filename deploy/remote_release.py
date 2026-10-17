@@ -6,7 +6,7 @@ ReleaseManager accepts a temporary root and command runner for offline drills.
 
 import argparse
 import base64
-from contextlib import contextmanager
+from contextlib import contextmanager, closing
 from datetime import datetime, timezone
 import hashlib
 import json
@@ -14,6 +14,7 @@ import os
 from pathlib import Path, PurePosixPath
 import re
 import shutil
+import sqlite3
 import stat
 import subprocess
 import sys
@@ -247,6 +248,51 @@ class ReleaseManager:
                 shutil.rmtree(str(temporary))
             raise
 
+    def backup_sqlite(self, source, target):
+        """Online backup includes committed WAL frames in one consistent database."""
+        if hasattr(sqlite3.Connection, 'backup'):
+            import time
+            started = time.monotonic()
+
+            def progress(status, remaining, total):
+                if time.monotonic() - started > 120:
+                    raise ReleaseError('SQLite backup timed out; release stopped.')
+
+            with closing(sqlite3.connect(source.as_uri() + '?mode=ro', uri=True)) as live:
+                with closing(sqlite3.connect(str(target))) as copy:
+                    live.backup(copy, pages=256, progress=progress)
+                    copy.execute('PRAGMA journal_mode=DELETE')
+                    if copy.execute('PRAGMA integrity_check').fetchall() != [('ok',)]:
+                        raise ReleaseError('SQLite backup integrity check failed.')
+        else:
+            # Production Python 3.6 lacks Connection.backup. Use the running
+            # app's Node 24 SQLite backup API, with a private mounted temp file.
+            data_root = safe_path(self.root, 'data')
+            temporary = safe_path(data_root, '.sqlite-backup-' + uuid.uuid4().hex)
+            script = """import { DatabaseSync, backup } from 'node:sqlite';
+import { chmodSync } from 'node:fs';
+process.umask(0o077);
+const db = new DatabaseSync(process.argv[1], { readOnly: true });
+try { await backup(db, process.argv[2]); } finally { db.close(); }
+chmodSync(process.argv[2], 0o600);
+const copy = new DatabaseSync(process.argv[2]);
+try { copy.exec('PRAGMA journal_mode=DELETE'); if (JSON.stringify(copy.prepare('PRAGMA integrity_check').all()) !== '[{"integrity_check":"ok"}]') throw new Error('Invalid SQLite backup'); }
+finally { copy.close(); }
+"""
+            try:
+                self.runner(['docker', 'compose', 'exec', '-T', 'app', 'node', '--input-type=module', '-e', script,
+                             '/data/' + source.relative_to(data_root).as_posix(), '/data/' + temporary.name], self.root)
+                check_node(temporary)
+                if not temporary.is_file():
+                    raise ReleaseError('SQLite snapshot was not produced.')
+                shutil.copyfile(str(temporary), str(target))
+            finally:
+                for suffix in ('', '-wal', '-shm', '-journal'):
+                    extra = safe_path(data_root, temporary.name + suffix)
+                    if extra.exists():
+                        extra.unlink()
+        target.chmod(0o600)
+
     def backup_data(self, release_id):
         """Separate private safety copy. No restore path ever reads this directory."""
         identifier(release_id)
@@ -260,17 +306,28 @@ class ReleaseManager:
             data_root = safe_path(self.root, 'data')
             entries = []
             sources = regular_files(data_root)
+            databases = set()
+            for source in sources:
+                with source.open('rb') as stream:
+                    if stream.read(16) == b'SQLite format 3\x00' or source.suffix in ('.sqlite', '.db'):
+                        databases.add(source)
+            journals = set(Path(str(source) + suffix) for source in databases for suffix in ('-wal', '-shm', '-journal'))
+            sources = [source for source in sources if source not in journals]
             for source in sources:
                 name = source.relative_to(data_root).as_posix()
                 target = safe_path(temporary / 'files', name)
                 private_directory(target.parent)
-                before = digest(source)
-                shutil.copyfile(str(source), str(target))
-                target.chmod(0o600)
-                if digest(target) != before or digest(source) != before:
-                    raise ReleaseError('Data changed during backup; retry the release without restoring data.')
+                if source in databases:
+                    self.backup_sqlite(source, target)
+                    before = digest(target)
+                else:
+                    before = digest(source)
+                    shutil.copyfile(str(source), str(target))
+                    target.chmod(0o600)
+                    if digest(target) != before or digest(source) != before:
+                        raise ReleaseError('Data changed during backup; retry the release without restoring data.')
                 entries.append({'path': name, 'sha256': before, 'size': target.stat().st_size})
-            if sources != regular_files(data_root):
+            if sources != [source for source in regular_files(data_root) if source not in journals]:
                 raise ReleaseError('Data file list changed during backup; retry the release.')
             manifest = {'version': 1, 'id': release_id, 'createdAt': timestamp(),
                         'files': entries, 'dataExisted': data_root.exists(),

@@ -4,6 +4,7 @@ Run: python -m unittest discover -s tests -p test_deploy_release.py -v
 """
 
 import ast
+from contextlib import closing
 import hashlib
 import importlib.util
 import io
@@ -11,6 +12,8 @@ import json
 import os
 from pathlib import Path
 import stat
+import sqlite3
+import subprocess
 import sys
 import tarfile
 import tempfile
@@ -29,6 +32,55 @@ def digest(content):
 
 
 class ReleaseRecoveryTests(unittest.TestCase):
+    def sqlite_fixture(self):
+        source = self.root / 'data/auth.sqlite'
+        live = sqlite3.connect(str(source))
+        self.addCleanup(live.close)
+        live.execute('PRAGMA journal_mode=WAL')
+        live.execute('PRAGMA wal_autocheckpoint=0')
+        live.execute('CREATE TABLE payments (id INTEGER PRIMARY KEY, amount INTEGER)')
+        live.execute('INSERT INTO payments VALUES (1, 990)')
+        live.commit()
+        return source, live
+
+    def assert_sqlite_snapshot(self, name):
+        manifest = self.manager.backup_data(name)
+        paths = [item['path'] for item in manifest['files']]
+        self.assertIn('auth.sqlite', paths)
+        self.assertFalse(any(item.endswith(('-wal', '-shm', '-journal')) for item in paths))
+        backup = self.root / '.data-backups' / name / 'files/auth.sqlite'
+        with closing(sqlite3.connect(str(backup))) as restored:
+            self.assertEqual(restored.execute('PRAGMA integrity_check').fetchone(), ('ok',))
+            self.assertEqual(restored.execute('SELECT * FROM payments').fetchall(), [(1, 990)])
+        return backup
+
+    def test_sqlite_backup_includes_committed_wal_and_survives_checkpoint(self):
+        source, live = self.sqlite_fixture()
+        backup = self.assert_sqlite_snapshot('sqlite-consistent')
+        live.execute('PRAGMA wal_checkpoint(TRUNCATE)')
+        live.execute('INSERT INTO payments VALUES (2, 1990)')
+        live.commit()
+        with closing(sqlite3.connect(str(backup))) as restored:
+            self.assertEqual(restored.execute('SELECT * FROM payments').fetchall(), [(1, 990)])
+
+    def test_python36_fallback_runs_real_node_online_backup(self):
+        self.sqlite_fixture()
+        def node_runner(command, cwd):
+            self.assertEqual(command[:7], ['docker', 'compose', 'exec', '-T', 'app', 'node', '--input-type=module'])
+            args = command[5:]
+            args[-2:] = [str(self.root / 'data' / Path(item).name) for item in args[-2:]]
+            subprocess.run(args, check=True, capture_output=True, timeout=30)
+        self.manager.runner = node_runner
+        with mock.patch.object(release.sqlite3, 'Connection', object):
+            self.assert_sqlite_snapshot('node-consistent')
+        self.assertEqual(list((self.root / 'data').glob('.sqlite-backup-*')), [])
+
+    def test_corrupt_sqlite_stops_data_backup(self):
+        self.write('data/auth.sqlite', b'not a database')
+        with self.assertRaises(sqlite3.DatabaseError):
+            self.manager.backup_data('corrupt-db')
+        self.assertFalse((self.root / '.data-backups/corrupt-db').exists())
+
     def setUp(self):
         self.sandbox = tempfile.TemporaryDirectory(prefix="type-release-test-")
         self.addCleanup(self.sandbox.cleanup)

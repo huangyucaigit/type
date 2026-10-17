@@ -59,6 +59,38 @@ async function setup(t, options = {}) {
 const rejects = (promise, code, status) => assert.rejects(promise, error => error.code === code && (!status || error.status === status));
 const tokenOf = entry => new URL(entry.url).searchParams.values().next().value;
 
+test('email verification rejects the wrong current password and preserves the existing hash', async t => {
+  const h = await setup(t), c = h.client();
+  await c.register();
+  await rejects(c.call('/api/auth/email/bind', { email: 'student@example.test', password: 'Wrong-password-123' }), 'INVALID_CREDENTIALS');
+  assert.equal(h.binds.length, 0);
+  await c.call('/api/auth/email/bind', { email: 'student@example.test', password: PASSWORD });
+  const result = await c.call('/api/auth/email/confirm', { token: tokenOf(h.binds[0]) });
+  assert.equal(result.user.emailVerified, true);
+  assert.ok((await h.client().login()).user);
+  await rejects(h.client().login('student@example.test', 'Wrong-password-123'), 'INVALID_CREDENTIALS');
+});
+
+test('session reads without device cookies never grow browser associations and have a read limit', async t => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'zijian-session-read-'));
+  t.after(() => rm(directory, { recursive: true, force: true, maxRetries: 3 }));
+  const filename = path.join(directory, 'auth.sqlite'), h = await setup(t, { filename }), c = h.client();
+  await c.register();
+  const session = `zijian_session=${c.jar.get('zijian_session')}`;
+  for (let i = 0; i < 1000; i++) await c.call('/api/auth/session', undefined, { headers: { cookie: session }, clientIp: `test-ip-${Math.floor(i / 100)}` });
+  const { DatabaseSync } = await import('node:sqlite');
+  const db = new DatabaseSync(filename);
+  try {
+    assert.equal(db.prepare('SELECT count(*) AS count FROM access_referral_accounts').get().count, 1);
+    assert.equal(db.prepare('SELECT count(*) AS count FROM access_guests').get().count, 0);
+  } finally { db.close(); }
+  for (let i = 0; i < 120; i++) await c.call('/api/auth/session', undefined, { clientIp: 'limited-session-ip' });
+  await rejects(c.call('/api/auth/session', undefined, { clientIp: 'limited-session-ip' }), 'RATE_LIMITED', 429);
+  h.advance(60001);
+  assert.ok((await c.call('/api/auth/session', undefined, { clientIp: 'limited-session-ip' })).user);
+  h.service.close();
+});
+
 test('registration normalizes email and leaves trial explicitly unclaimed', async t => {
   const h = await setup(t), c = h.client();
   const state = await c.register(' Student@Example.Test ');

@@ -88,6 +88,16 @@ function assertPublicMessage(message) {
   assert.equal(typeof message.message, 'string');
 }
 
+test('public feedback reads have an IP limit before loading the board', async () => {
+  let reads = 0;
+  await withServer({ read: async () => { reads++; return { cookie: 'test-cookie', messages: [] }; } }, async ({ request }) => {
+    for (let i = 0; i < 60; i++) assert.equal((await request()).status, 200);
+    assert.equal((await request()).status, 429);
+    assert.equal(reads, 60);
+    assert.equal((await request('/api/status')).status, 200);
+  });
+});
+
 test('feedback GET issues a protected identity cookie and returns an empty public board', async () => {
   await withTemporaryStore(async ({ makeStore }) => {
     await withServer(makeStore(), async ({ session }) => {
@@ -292,7 +302,7 @@ test('feedback static pages are accessible while private data and backend source
       }
       for (const secretPath of ['/.env', '/feedback-store.mjs', '/translation-server.mjs', '/.data/feedback.json', '/.data/feedback-secret', '/tests/feedback-server.test.cjs', '/%2e%2e/.env', '/.data%2ffeedback.json']) {
         const response = await request(secretPath);
-        assert.equal(response.status, 404, secretPath);
+        assert.ok([400, 404].includes(response.status), secretPath);
         assert.ok(!response.body.includes(privateError));
       }
     });
