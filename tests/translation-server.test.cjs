@@ -254,7 +254,7 @@ test('truncated and empty provider results are rejected instead of cached', asyn
 
 test('local server serves the working page/assets and publishes only safe status metadata', async () => {
   await withServer(async ({ request, requests }) => {
-    const publicFiles = ['/', '/index.html', '/about.html', '/styles.css', '/sentence-mode.css', '/about.css', '/auth.css', '/starter-wheel.css', '/share-card.css', '/robots.txt', '/sitemap.xml', '/app.js', '/typing-core.js', '/sentence-core.js', '/sentence-mode.js', '/reference-selection.js', '/selection-translation.js', '/auth.js', '/starter-wheel.js', '/qr-code.js', '/share-card.js'];
+    const publicFiles = ['/', '/index.html', '/about.html', '/styles.css', '/sentence-mode.css', '/about.css', '/auth.css', '/starter-wheel.css', '/share-card.css', '/billing.css', '/robots.txt', '/sitemap.xml', '/app.js', '/typing-core.js', '/sentence-core.js', '/sentence-mode.js', '/floating-timer.js', '/reference-selection.js', '/selection-translation.js', '/auth.js', '/starter-wheel.js', '/qr-code.js', '/share-card.js', '/billing.js'];
     for (const file of publicFiles) {
       const response = await request(file);
       assert.equal(response.status, 200, file);
@@ -278,7 +278,7 @@ test('local server serves the working page/assets and publishes only safe status
 
 test('local server never serves credentials, backend source, tests or traversal paths', async () => {
   await withServer(async ({ request, requests }) => {
-    for (const url of ['/.env', '/.env.example', '/translation-server.mjs', '/tests/translation-server.test.cjs', '/../.env', '/%2e%2e/.env', '/%2eenv', '/%2Eenv', '/..%2f.env', '/%2e%2e%5c.env', '/index.html/../../.env', '/.git/config', '/start-translation.cmd']) {
+    for (const url of ['/.env', '/.env.example', '/translation-server.mjs', '/payment-client.mjs', '/payment-config.mjs', '/payment-mock.mjs', '/payment-admin.mjs', '/auth-service.mjs', '/.deploy/pay-project.private.json', '/AliyunSMSAccessKey.csv', '/tests/translation-server.test.cjs', '/../.env', '/%2e%2e/.env', '/%2eenv', '/%2Eenv', '/..%2f.env', '/%2e%2e%5c.env', '/index.html/../../.env', '/.git/config', '/start-translation.cmd']) {
       const response = await request(url);
       assert.equal(response.status, 404, url);
       assert.ok(!response.body.includes(secret));

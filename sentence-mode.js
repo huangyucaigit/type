@@ -146,6 +146,7 @@
       $("sentenceTimerStart").setAttribute("aria-label", `${action}分句模式秒表`);
       $("sentenceTimerStart").setAttribute("aria-pressed", String(running));
       $("sentenceTimerClear").disabled = togglingTimer;
+      window.ZijianTimer?.update({ mode: "sentence", value, running, started: clock.state !== "idle" });
     }
 
     function refreshSummary() {

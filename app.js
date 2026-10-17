@@ -366,6 +366,7 @@
     $("timerClear").disabled = togglingTimer;
     const state = running ? "计时中" : clock.state === "stopped" ? "已暂停" : "未开始";
     if ($("timerState").textContent !== state) $("timerState").textContent = state;
+    window.ZijianTimer?.update({ mode: "realtime", value, running, started: clock.state !== "idle" });
   }
 
   function reconcile() {
@@ -449,6 +450,7 @@
     $("sentencePanel").hidden = mode !== "sentence";
     $("timerDisplay").hidden = mode !== "realtime";
     $("sentenceTimerDisplay").hidden = mode !== "sentence";
+    window.ZijianTimer?.setMode(mode);
     ["realtimeModeButton", "sentenceFullModeButton"].forEach(id => $(id)?.setAttribute("aria-pressed", String(mode === "realtime")));
     ["sentenceModeButton", "sentenceSplitModeButton"].forEach(id => $(id)?.setAttribute("aria-pressed", String(mode === "sentence")));
     if (moveFocus) $(mode === "realtime" ? "realtimeModeButton" : "sentenceSplitModeButton")?.focus({ preventScroll: true });

@@ -56,9 +56,8 @@ dialog{width:min(680px,calc(100% - 32px));max-height:calc(100dvh - 48px);border:
 
 /* Keep article actions, practice mode, and timekeeping in separate places. */
 .practice-page .page-shell {
-  width: min(1080px, calc(100% - 200px));
-  margin-left: max(32px, calc((100vw - 1280px) / 2));
-  margin-right: auto;
+  width: min(1080px, calc(100% - 80px));
+  margin: 0 auto;
 }
 .practice-page .toolbar {
   align-items: center;
@@ -99,18 +98,31 @@ dialog{width:min(680px,calc(100% - 32px));max-height:calc(100dvh - 48px);border:
 .floating-timer .timer-controls { justify-content: center; gap: 3px; margin-top: 8px; }
 .floating-timer .timer-button { flex: 1; min-width: 0; min-height: 29px; padding: 4px 2px; border-radius: 5px; font-size: 10px; line-height: 1.5; touch-action: manipulation; }
 .floating-timer .timer-button:disabled { opacity: 1; color: #aeb4a4; background: #f5f5ef; border-color: #e5e6dc; }
+.floating-timer { transition: right .16s ease; }
+.timer-expanded { animation: timer-panel-in .16s ease-out; }
+.timer-collapse { position: absolute; top: 0; right: 0; width: 28px; height: 28px; padding: 7px; border: 0; border-radius: 0 12px 0 8px; color: #8a9581; background: transparent; touch-action: manipulation; }
+.timer-collapse::after { content: ""; position: absolute; inset: -8px; }
+.timer-collapse svg { display: block; width: 13px; height: 13px; }
+.timer-collapse:hover { color: var(--green); background: #eef2e8; }
+.floating-timer .timer-label { padding-right: 10px; padding-left: 0; }
+.floating-timer[data-collapsed="true"] { right: 0; width: max-content; padding: 0; border: 0; border-radius: 11px 0 0 11px; box-shadow: none; }
+.timer-edge-tab { display: inline-flex; justify-content: center; align-items: center; gap: 4px; min-width: 44px; height: 44px; padding: 0 8px; border: 1px solid #dce3d5; border-right: 0; border-radius: 11px 0 0 11px; background: var(--paper); color: #798873; box-shadow: -3px 3px 16px #38492d08; touch-action: manipulation; animation: timer-panel-in .16s ease-out; }
+.timer-edge-tab:hover { color: var(--green); background: #f1f4eb; }
+.timer-edge-value { color: #687c61; font-family: var(--typing-font); font-size: 11px; font-variant-numeric: tabular-nums; line-height: 1; white-space: nowrap; }
+.timer-edge-dot { width: 4px; height: 4px; flex: none; border-radius: 50%; background: #a5ad9f; }
+.timer-edge-tab[data-running="true"] .timer-edge-dot { background: var(--green); }
+.timer-edge-icon, .timer-edge-icon svg { display: block; width: 16px; height: 16px; }
+.timer-edge-arrow { width: 9px; height: 12px; }
+@keyframes timer-panel-in { from { opacity: .2; } to { opacity: 1; } }
+@media (prefers-reduced-motion: reduce) { .floating-timer { transition: none; } .timer-expanded, .timer-edge-tab { animation: none; } }
 @media (max-width: 1100px) {
-  .practice-page .page-shell { width: calc(100% - 192px); }
   .practice-page .paper-header { flex-wrap: wrap; gap: 16px 20px; }
   .practice-page .article-heading { flex-basis: 340px; }
 }
-@media (max-width: 1000px) {
+/* Keep the timer clear of centered articles when the side margin is too narrow. */
+@media (max-width: 1420px) {
   html:has(.practice-page) { scroll-padding-bottom: 152px; }
-  .practice-page .page-shell {
-    width: calc(100% - 64px);
-    margin: 0 auto;
-    padding-bottom: 152px;
-  }
+  .practice-page .page-shell { padding-bottom: 152px; }
   .floating-timer {
     top: auto;
     right: 16px;
@@ -123,6 +135,9 @@ dialog{width:min(680px,calc(100% - 32px));max-height:calc(100dvh - 48px);border:
   .floating-timer [data-long-time="true"] .timer-value { font-size: 16px; line-height: 28.8px; }
   .floating-timer .timer-controls { margin-top: 7px; }
   .floating-timer .timer-button { min-height: 28px; }
+}
+@media (max-width: 1000px) {
+  .practice-page .page-shell { width: calc(100% - 64px); }
 }
 @media (max-width: 760px) {
   .practice-page .page-shell { width: calc(100% - 40px); }

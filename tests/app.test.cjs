@@ -139,7 +139,7 @@ function createPage({ fetch, titleFetch, protocol = 'http:', storage = memorySto
       getLearningSources() { return []; },
     };
   } };
-  for (const name of ['typing-core.js', 'article-history.js', 'reference-selection.js', 'selection-translation.js', 'app.js']) {
+  for (const name of ['typing-core.js', 'article-history.js', 'floating-timer.js', 'reference-selection.js', 'selection-translation.js', 'app.js']) {
     vm.runInContext(fs.readFileSync(path.join(__dirname, '..', name), 'utf8'), context, { filename: name });
   }
   const $ = id => document.getElementById(id);
@@ -419,6 +419,46 @@ test('one stopwatch button starts, pauses and continues while typing never chang
   assert.equal(page.$('typingInput').value, 'Learning');
   assert.equal(page.$('timerStart').textContent, '暂停');
   assert.equal(page.$('timerStart').getAttribute('aria-label'), '暂停全文模式秒表');
+});
+
+test('folding the full stopwatch preserves the draft and running time while the edge label keeps updating', async () => {
+  const storage = memoryStorage();
+  const page = createPage({ storage });
+  assert.equal(page.$('floatingTimer').getAttribute('data-collapsed'), 'false');
+  assert.equal(page.$('timerExpand').hidden, true);
+  await page.fire('timerCollapse', 'click');
+  assert.equal(page.$('floatingTimer').getAttribute('data-collapsed'), 'true');
+  assert.equal(page.$('timerExpanded').hidden, true);
+  assert.equal(page.$('timerExpand').hidden, false);
+  assert.equal(page.$('timerCompactIcon').hidden, false);
+  page.tick(1500);
+  assert.equal(page.$('timerState').textContent, '未开始');
+  await page.fire('timerExpand', 'click');
+  await page.type('Learning');
+  await page.fire('timerStart', 'click');
+  page.tick(2200);
+  await page.fire('timerCollapse', 'click');
+  assert.equal(page.$('timerState').textContent, '计时中');
+  assert.equal(page.$('timerCompactValue').textContent, '00:02');
+  assert.equal(page.$('timerCompactIcon').hidden, true);
+  page.tick(3100);
+  assert.equal(page.$('timerCompactValue').textContent, '00:05');
+  assert.equal(page.$('timerState').textContent, '计时中');
+  assert.equal(page.$('typingInput').value, 'Learning');
+  await page.fire('timerExpand', 'click');
+  assert.equal(page.$('timerExpanded').hidden, false);
+  assert.equal(page.$('timerValue').textContent, '00:05');
+  assert.equal(page.$('timerState').textContent, '计时中');
+  await page.fire('timerStart', 'click');
+  await page.fire('timerCollapse', 'click');
+  page.tick(5000);
+  assert.equal(page.$('timerCompactValue').textContent, '00:05');
+  assert.equal(page.$('timerState').textContent, '已暂停');
+  assert.equal(storage.getItem('mars-ielts-typing:timer-collapsed:v1'), '1');
+  const restored = createPage({ storage });
+  assert.equal(restored.$('floatingTimer').getAttribute('data-collapsed'), 'true');
+  assert.equal(restored.$('timerState').textContent, '未开始');
+  assert.equal(restored.$('timerCompactIcon').hidden, false);
 });
 
 test('repeated stopwatch clicks during authorization start once, and pausing needs no new authorization', async () => {

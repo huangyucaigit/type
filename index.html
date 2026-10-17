@@ -22,14 +22,17 @@
   <link rel="stylesheet" href="auth.css">
   <link rel="stylesheet" href="starter-wheel.css">
   <link rel="stylesheet" href="share-card.css">
+  <link rel="stylesheet" href="billing.css">
   <script src="auth.js" defer></script>
   <script src="starter-wheel.js" defer></script>
   <script src="qr-code.js" defer></script>
+  <script src="billing.js" defer></script>
   <script src="share-card.js" defer></script>
   <script src="typing-core.js" defer></script>
   <script src="article-history.js" defer></script>
   <script src="sentence-core.js" defer></script>
   <script src="sentence-mode.js" defer></script>
+  <script src="floating-timer.js" defer></script>
   <script src="reference-selection.js" defer></script>
   <script src="selection-translation.js" defer></script>
   <script src="app.js" defer></script>
@@ -168,7 +171,9 @@
     </main>
   </div>
 
-  <aside id="floatingTimer" class="floating-timer" aria-label="练习秒表">
+  <aside id="floatingTimer" class="floating-timer" aria-label="练习秒表" data-collapsed="false">
+    <div id="timerExpanded" class="timer-expanded">
+    <button id="timerCollapse" class="timer-collapse" type="button" aria-label="收起秒表" aria-expanded="true" aria-controls="timerExpanded" title="收起秒表"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m9 6 6 6-6 6"/></svg></button>
     <div id="timerDisplay" class="timer-display" aria-label="全文模式秒表">
       <span class="timer-label">练习秒表 · 全文</span>
       <span id="timerValue" class="timer-value">00:00</span>
@@ -187,6 +192,13 @@
         <button id="sentenceTimerClear" class="timer-button" type="button" aria-label="清空分句模式秒表">清空</button>
       </div>
     </div>
+    </div>
+    <button id="timerExpand" class="timer-edge-tab" type="button" aria-label="展开全文模式秒表，未开始" aria-expanded="false" aria-controls="timerExpanded" data-running="false" hidden>
+      <span id="timerCompactDot" class="timer-edge-dot" aria-hidden="true" hidden></span>
+      <span id="timerCompactIcon" class="timer-edge-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M9 3h6m-3 0v3m6 1 2-2M12 10v5"/><circle cx="12" cy="14" r="8"/></svg></span>
+      <span id="timerCompactValue" class="timer-edge-value" aria-hidden="true" hidden>00:00</span>
+      <svg class="timer-edge-arrow" viewBox="0 0 24 24" aria-hidden="true"><path d="m15 6-6 6 6 6"/></svg>
+    </button>
   </aside>
 
   <dialog id="shareDialog" class="share-dialog" aria-labelledby="shareTitle" aria-describedby="shareDescription shareRules">
@@ -224,8 +236,9 @@
   <dialog id="plansDialog" class="plans-dialog" aria-labelledby="plansTitle" aria-describedby="plansDescription">
     <div class="dialog-header"><div><span class="auth-eyebrow">选择适合你的练习节奏</span><h2 id="plansTitle">同样的功能，不同的时长</h2></div><button id="closePlans" class="icon-button" type="button" aria-label="关闭套餐面板"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m6 6 12 12M18 6 6 18"/></svg></button></div>
     <p id="plansDescription" class="dialog-description">所有套餐均包含全文与分句练习、范文导入和 AI 学习。试用期间也可完整体验这些功能。</p>
-    <div class="plan-grid"><article class="plan-card"><h3>月度</h3><p class="plan-price"><span>¥</span>9.9<small> / 月</small></p><p>适合集中练习</p></article><article class="plan-card plan-featured"><span class="plan-tag">从容备考</span><h3>季度</h3><p class="plan-price"><span>¥</span>19.9<small> / 季</small></p><p>给进步多一点时间</p></article><article class="plan-card"><h3>年度</h3><p class="plan-price"><span>¥</span>59.9<small> / 年</small></p><p>让练习成为日常</p></article></div>
-    <p class="plans-note">支付功能暂未开放，目前无法购买。免登录体验和时长券均可使用全部功能；时长用完后，文章和当前输入仍可查看、复制。</p>
+    <div class="plan-grid"><article class="plan-card"><h3>月度</h3><p class="plan-price"><span>¥</span>9.9<small> / 30 天</small></p><p>适合集中练习</p><button class="button button-primary" type="button" data-buy-plan="monthly" disabled>选择月度</button></article><article class="plan-card plan-featured"><span class="plan-tag">从容备考</span><h3>季度</h3><p class="plan-price"><span>¥</span>19.9<small> / 90 天</small></p><p>给进步多一点时间</p><button class="button button-primary" type="button" data-buy-plan="quarterly" disabled>选择季度</button></article><article class="plan-card"><h3>年度</h3><p class="plan-price"><span>¥</span>59.9<small> / 365 天</small></p><p>让练习成为日常</p><button class="button button-primary" type="button" data-buy-plan="yearly" disabled>选择年度</button></article></div>
+    <p id="billingPlansNote" class="plans-note">正在确认支付状态。各套餐功能相同，已有时长会顺延。</p>
+    <button id="openBillingHistory" class="auth-text-button" type="button">订单记录</button>
     <div class="dialog-footer"><button id="plansTrialAction" class="button button-primary" type="button">注册领 3–7 天</button><button id="plansDone" class="button button-secondary" type="button">知道了</button></div>
   </dialog>
 
@@ -246,6 +259,13 @@
     <p id="selectionTranslationStatus" class="selection-translation-status" role="status" aria-live="polite"></p>
     <button id="selectionTranslationRetry" class="button button-secondary selection-translation-retry" type="button" hidden>重试分析</button>
   </section>
+
+  <dialog id="billingDialog" class="billing-dialog" aria-labelledby="billingTitle" aria-describedby="billingDescription">
+    <div class="billing-dialog-head"><div><p class="billing-eyebrow" id="billingModeLabel"></p><h2 id="billingTitle">购买练习时长</h2></div><button type="button" id="closeBilling" class="icon-button" aria-label="关闭支付窗口"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m6 6 12 12M18 6 6 18"/></svg></button></div>
+    <p id="billingDescription" class="billing-description"></p>
+    <div id="billingContent"></div>
+    <p id="billingMessage" class="billing-message" role="status" hidden></p>
+  </dialog>
 
   <dialog id="historyDialog" aria-labelledby="historyTitle" aria-describedby="historyDescription">
     <div class="dialog-header">

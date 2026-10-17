@@ -417,3 +417,39 @@ test('the share dialog blocks practice shortcuts and closes before an account di
   assert.equal(open, false);
   assert.equal(h.get('authDialog').open, true);
 });
+
+test('a late billing response cannot restore a previously logged-in account or its entitlement', async () => {
+  const initial = { ...guestState(), user: { id: 'buyer-a', email: 'a@example.test' } };
+  const other = { ...guestState(), user: { id: 'buyer-b', email: 'b@example.test' } };
+  const pending = deferred();
+  const h = page(url => url.startsWith('/api/billing/') ? pending.promise
+    : response(url === '/api/auth/login' ? other : initial));
+  await h.auth.ready;
+  const purchase = h.auth.billingRequest('/api/billing/orders', { planId: 'monthly', requestId: 'request-12345678901234567890' });
+  const rejected = assert.rejects(purchase, error => error.code === 'AUTH_STATE_CHANGED');
+  await waitFor(() => h.calls.some(call => call.url === '/api/billing/orders'));
+  h.auth.open('login');
+  h.get('authEmail').value = 'b@example.test'; h.get('authPassword').value = 'Password-12345';
+  h.get('authForm').emit('submit');
+  await waitFor(() => h.auth.getState().user?.id === 'buyer-b');
+  pending.resolve(response({ ...initial, entitlement: { hasAccess: true, expiresAt: NOW + 30 * DAY },
+    order: { orderNo: 'private-order-a', status: 'PAID' } }));
+  await rejected;
+  assert.equal(h.auth.getState().user.id, 'buyer-b');
+  assert.equal(h.auth.getState().entitlement.hasAccess, false);
+});
+
+test('billing requests use session CSRF and the billing dialog participates in modal blocking', async () => {
+  const state = { ...guestState(), user: { id: 'buyer', email: 'buyer@example.test' } };
+  const h = page(() => response(state));
+  await h.auth.ready;
+  await h.auth.billingRequest('/api/billing/orders', { planId: 'monthly', requestId: 'request-12345678901234567890' });
+  assert.equal(h.calls.at(-1).options.headers['X-CSRF-Token'], state.csrfToken);
+  assert.equal(h.calls.at(-1).options.credentials, 'same-origin');
+  await assert.rejects(h.auth.billingRequest('/api/auth/logout', {}), /支付请求地址无效/u);
+  let visible = true;
+  h.window.ZijianBilling = { isOpen: () => visible, close: () => { visible = false; } };
+  assert.equal(h.auth.isDialogOpen(), true);
+  h.auth.open();
+  assert.equal(visible, false);
+});

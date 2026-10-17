@@ -103,7 +103,12 @@ const { readConfig } = await import(pathToFileURL(path.join(root, 'translation-s
 const config = readConfig();
 const lines = [`DEEPSEEK_API_KEY=${JSON.stringify(config.key)}`, `DEEPSEEK_API_URL=${JSON.stringify(config.endpoint)}`];
 const authKeys = ['ALIYUN_ACCESS_KEY_ID', 'ALIYUN_ACCESS_KEY_SECRET', 'ALIYUN_SMS_REGION_ID', 'ALIYUN_SMS_SIGN_NAME', 'ALIYUN_SMS_LOGIN_TEMPLATE_CODE', 'ALIYUN_SMS_REGISTER_TEMPLATE_CODE', 'AWS_ACCESS_KEY_ID', 'AWS_SECRET_ACCESS_KEY', 'AWS_REGION', 'SES_FROM_EMAIL'];
-for (const key of authKeys) {
+const paymentKeys = ['ZIJIAN_ENABLE_REAL_PAYMENTS', 'PAY_BASE_URL', 'PAY_PROJECT_CODE', 'PAY_API_KEY_ID', 'PAY_API_SECRET_BASE64', 'PAY_NOTIFY_KEY_ID', 'PAY_NOTIFY_SECRET_BASE64', 'PAY_NOTIFY_URL', 'PAY_NOTIFY_KEYS_JSON'];
+// Local simulation must never enable public simulated membership grants.
+const selectedPaymentMode = (process.env.ZIJIAN_PAYMENT_MODE || 'disabled').trim();
+const paymentMode = selectedPaymentMode === 'mock' ? 'disabled' : selectedPaymentMode;
+lines.push(`ZIJIAN_PAYMENT_MODE=${JSON.stringify(paymentMode)}`);
+for (const key of [...authKeys, ...paymentKeys]) {
     const value = process.env[key] || '';
     if (/[\r\n\0]/.test(value)) throw new Error('Private configuration contains unsupported characters.');
     lines.push(`${key}=${JSON.stringify(value)}`);

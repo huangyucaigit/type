@@ -10,6 +10,8 @@ import { createSentenceReviewer, validateSentenceReviewInput, SentenceReviewErro
 import { createArticleTitler, validateTitleInput, ArticleTitleError } from './article-title.mjs';
 import { createAuthService, AuthError } from './auth-service.mjs';
 import { createAuthProviders } from './auth-providers.mjs';
+import { PaymentError } from './payment-client.mjs';
+import { readPaymentOptions } from './payment-config.mjs';
 
 const ROOT = path.dirname(fileURLToPath(import.meta.url));
 export const PORT = 4173;
@@ -22,8 +24,8 @@ const ASSETS = new Map([
   ['/feedback.html', ['feedback.html', 'text/html; charset=utf-8']],
   ['/robots.txt', ['robots.txt', 'text/plain; charset=utf-8']],
   ['/sitemap.xml', ['sitemap.xml', 'application/xml; charset=utf-8']],
-  ...['styles.css', 'sentence-mode.css', 'about.css', 'feedback.css', 'auth.css', 'starter-wheel.css', 'share-card.css'].map(name => [`/${name}`, [name, 'text/css; charset=utf-8']]),
-  ...['app.js', 'article-history.js', 'typing-core.js', 'sentence-core.js', 'sentence-mode.js', 'reference-selection.js', 'selection-translation.js', 'feedback.js', 'auth.js', 'starter-wheel.js', 'qr-code.js', 'share-card.js'].map(name => [`/${name}`, [name, 'text/javascript; charset=utf-8']]),
+  ...['styles.css', 'sentence-mode.css', 'about.css', 'feedback.css', 'auth.css', 'starter-wheel.css', 'share-card.css', 'billing.css'].map(name => [`/${name}`, [name, 'text/css; charset=utf-8']]),
+  ...['app.js', 'article-history.js', 'typing-core.js', 'sentence-core.js', 'sentence-mode.js', 'floating-timer.js', 'reference-selection.js', 'selection-translation.js', 'feedback.js', 'auth.js', 'starter-wheel.js', 'qr-code.js', 'share-card.js', 'billing.js'].map(name => [`/${name}`, [name, 'text/javascript; charset=utf-8']]),
 ]);
 
 export class TranslationError extends Error {
@@ -328,7 +330,7 @@ function feedbackCookie(request) {
   return value ? value.trim().slice('mars_feedback='.length) : '';
 }
 
-export function createServer({ translate, analyze, review, titleArticle, config, configured = true, publicOrigins = [], feedbackStore, trustProxy = false, feedbackRateLimiter, authService, authProviders, authFilename } = {}) {
+export function createServer({ translate, analyze, review, titleArticle, config, configured = true, publicOrigins = [], feedbackStore, trustProxy = false, feedbackRateLimiter, authService, authProviders, authFilename, paymentOptions, paymentNotificationLogger = entry => console.info(JSON.stringify(entry)) } = {}) {
   publicOrigins = publicOrigins.map(normalizePublicOrigin);
   feedbackStore ||= createFeedbackStore({ filePath: path.join(process.env.ZIJIAN_FEEDBACK_DATA_DIR || path.join(ROOT, '.data'), 'feedback.json') });
   feedbackRateLimiter ||= createFeedbackRateLimiter();
@@ -341,6 +343,7 @@ export function createServer({ translate, analyze, review, titleArticle, config,
   const getAuthService = () => authService ||= createAuthService({
     filename: authFilename || path.join(process.env.ZIJIAN_AUTH_DATA_DIR || path.join(ROOT, '.data'), 'auth.sqlite'),
     providers: authProviders || createAuthProviders(),
+    paymentOptions: paymentOptions || readPaymentOptions(),
   });
   const server = http.createServer(async (request, response) => {
     response.setHeader('X-Content-Type-Options', 'nosniff');
@@ -359,19 +362,42 @@ export function createServer({ translate, analyze, review, titleArticle, config,
     try {
       const secure = Boolean(request.socket.encrypted) || (trustProxy && request.headers['x-forwarded-proto'] === 'https');
       const hostname = new URL(`http://${host}`).hostname;
-      const accessRoute = pathname.startsWith('/api/auth/') || pathname === '/api/guest/start' || pathname.startsWith('/api/coupons/') || pathname.startsWith('/api/referrals/');
-      const protectedRoute = accessRoute || ['/api/translate', '/api/analyze', '/api/review', '/api/article-title'].includes(pathname);
+      const billingRoute = pathname.startsWith('/api/billing/');
+      const paymentNotification = pathname === '/payments/notify';
+      const allowMock = !trustProxy && ['127.0.0.1', 'localhost', '[::1]'].includes(hostname)
+        && ['127.0.0.1', '::1', '::ffff:127.0.0.1'].includes(request.socket.remoteAddress);
+      const accessRoute = pathname.startsWith('/api/auth/') || pathname === '/api/guest/start' || pathname.startsWith('/api/coupons/') || pathname.startsWith('/api/referrals/') || billingRoute;
+      const protectedRoute = accessRoute || paymentNotification || ['/api/translate', '/api/analyze', '/api/review', '/api/article-title'].includes(pathname);
       if (protectedRoute && !secure && !['127.0.0.1', 'localhost', '[::1]'].includes(hostname)) {
         return json(response, 426, { error: '请通过网站的 HTTPS 加密地址登录和练习。', code: 'HTTPS_REQUIRED' });
       }
       if (pathname === '/api/status' && request.method === 'GET') {
         return json(response, 200, { app: 'zijian-translation', configured, model: 'deepseek-flash' });
       }
+      if (paymentNotification) {
+        if (request.method !== 'POST') return json(response, 405, { error: '请求方法不受支持。' });
+        if (!/^application\/json(?:\s*;|$)/i.test(request.headers['content-type'] || '')) return json(response, 415, { error: '支付通知格式不受支持。' });
+        let size = 0;
+        const chunks = [];
+        for await (const chunk of request) {
+          size += chunk.length;
+          if (size > 65536) throw new AuthError(413, '支付通知过大。', 'PAYMENT_BODY_TOO_LARGE');
+          chunks.push(chunk);
+        }
+        const receipt = await getAuthService().receivePaymentNotification({ request, rawTarget: request.url,
+          rawBody: Buffer.concat(chunks), rawHeaders: request.rawHeaders, secure, origin: `${secure ? 'https' : 'http'}://${host}`, allowMock });
+        response.once('finish', () => {
+          // Log only the committed ACK and response status, never signatures or payloads.
+          try { paymentNotificationLogger?.({ event: 'payment_notification_ack', eventId: receipt.eventId, status: receipt.status, httpStatus: response.statusCode }); }
+          catch { /* Logging failure must not alter the committed payment result. */ }
+        });
+        return json(response, 200, receipt);
+      }
       if (accessRoute) {
         const isSession = pathname === '/api/auth/session';
-        if (request.method !== (isSession ? 'GET' : 'POST')) return json(response, 405, { error: '请求方法不受支持。' });
+        if (billingRoute ? !['GET', 'POST'].includes(request.method) : request.method !== (isSession ? 'GET' : 'POST')) return json(response, 405, { error: '请求方法不受支持。' });
         let body;
-        if (!isSession) {
+        if (request.method === 'POST') {
           if (typeof origin !== 'string') return json(response, 403, { error: '请从本站页面开始体验或操作账号。', code: 'CSRF_INVALID' });
           if (!/^application\/json(?:\s*;|$)/i.test(request.headers['content-type'] || '')) return json(response, 415, { error: '账号请求格式不受支持。' });
           body = await readJson(request, { maxBytes: 8192, invalidMessage: '账号请求格式无效。', largeMessage: '账号请求过大。' });
@@ -379,7 +405,7 @@ export function createServer({ translate, analyze, review, titleArticle, config,
         }
         const forwarded = request.headers['x-real-ip'];
         const clientIp = trustProxy && typeof forwarded === 'string' && isIP(forwarded) ? forwarded : request.socket.remoteAddress;
-        const result = await getAuthService().handle({ request, response, pathname, body, origin: `${secure ? 'https' : 'http'}://${host}`, clientIp, secure });
+        const result = await getAuthService().handle({ request, response, pathname, body, origin: `${secure ? 'https' : 'http'}://${host}`, clientIp, secure, allowMock });
         return json(response, 200, result);
       }
       if (pathname === '/api/feedback') {
@@ -444,9 +470,9 @@ export function createServer({ translate, analyze, review, titleArticle, config,
       response.end(request.method === 'HEAD' ? undefined : content);
     } catch (error) {
       if (response.destroyed) return;
-      const safeError = error instanceof TranslationError || error instanceof FeedbackError || error instanceof SentenceReviewError || error instanceof ArticleTitleError || error instanceof AuthError ? error : new TranslationError(500, '本机服务暂时出错，请稍后重试。');
+      const safeError = error instanceof TranslationError || error instanceof FeedbackError || error instanceof SentenceReviewError || error instanceof ArticleTitleError || error instanceof AuthError || error instanceof PaymentError ? error : new TranslationError(500, '本机服务暂时出错，请稍后重试。');
       const details = { error: safeError.message };
-      if (safeError instanceof AuthError) {
+      if (safeError instanceof AuthError || safeError instanceof PaymentError) {
         details.code = safeError.code;
         if (safeError.retryAfter) {
           details.retryAfter = Math.max(1, Math.ceil(safeError.retryAfter));

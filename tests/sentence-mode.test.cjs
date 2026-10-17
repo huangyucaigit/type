@@ -191,7 +191,7 @@ function createPage({ source = 'First sentence. Second sentence! Third sentence?
       'selectionTranslationStatus', 'selectionTranslationRetry', 'selectionTranslationClose',
     ].map($));
   }
-  const scripts = ['typing-core.js', 'article-history.js', 'sentence-core.js', 'sentence-mode.js'];
+  const scripts = ['typing-core.js', 'article-history.js', 'floating-timer.js', 'sentence-core.js', 'sentence-mode.js'];
   if (integrated) scripts.push('reference-selection.js', 'selection-translation.js', 'app.js');
   scripts.forEach(name => vm.runInContext(fs.readFileSync(path.join(__dirname, '..', name), 'utf8'), context, { filename: name }));
   const controller = integrated ? null : context.SentencePractice.create({ source, title: 'My essay', kind: '我的范文', onLearningReset });
@@ -799,6 +799,51 @@ test('the floating timer shows only the selected mode while independent clocks c
   assert.equal(page.group(0).answer.value, 'My sentence');
   assert.equal(page.$('typingInput').value, 'Learning');
   assert.equal(page.$('timerValue').textContent, '00:05');
+});
+
+test('the folded edge label follows each mode without pausing clocks or losing either draft', async () => {
+  const page = createPage({ integrated: true });
+  await page.fire('timerStart', 'click');
+  await page.realType('Learning');
+  page.tick(2200);
+  await page.fire('timerCollapse', 'click');
+  assert.equal(page.$('timerCompactValue').textContent, '00:02');
+  assert.equal(page.$('timerExpanded').hidden, true);
+  await page.fire('sentenceModeButton', 'click');
+  assert.equal(page.$('floatingTimer').getAttribute('data-collapsed'), 'true');
+  assert.equal(page.$('timerCompactIcon').hidden, false);
+  await page.fire('timerExpand', 'click');
+  await page.fire('sentenceTimerStart', 'click');
+  await page.type(0, 'My sentence');
+  await page.fire('timerCollapse', 'click');
+  page.tick(3300);
+  assert.equal(page.$('timerCompactValue').textContent, '00:03');
+  assert.equal(page.$('timerCompactIcon').hidden, true);
+  assert.equal(page.$('sentenceTimerState').textContent, '计时中');
+  await page.fire('sentenceFullModeButton', 'click');
+  assert.equal(page.$('timerCompactValue').textContent, '00:05');
+  assert.equal(page.$('timerExpanded').hidden, true);
+  page.tick(2100);
+  assert.equal(page.$('timerCompactValue').textContent, '00:07');
+  assert.equal(page.$('sentenceTimerValue').textContent, '00:05');
+  await page.fire('sentenceModeButton', 'click');
+  assert.equal(page.$('timerCompactValue').textContent, '00:05');
+  await page.fire('timerExpand', 'click');
+  await page.fire('sentenceTimerStart', 'click');
+  await page.fire('timerCollapse', 'click');
+  page.tick(2200);
+  assert.equal(page.$('timerCompactValue').textContent, '00:05');
+  assert.equal(page.$('sentenceTimerState').textContent, '已暂停');
+  assert.equal(page.$('timerValue').textContent, '00:09');
+  assert.equal(page.group(0).answer.value, 'My sentence');
+  assert.equal(page.$('typingInput').value, 'Learning');
+  await page.fire('timerExpand', 'click');
+  await page.fire('sentenceTimerClear', 'click');
+  await page.fire('timerCollapse', 'click');
+  assert.equal(page.$('timerCompactIcon').hidden, false);
+  assert.equal(page.$('sentenceTimerState').textContent, '未开始');
+  assert.equal(page.$('timerValue').textContent, '00:09');
+  assert.equal(page.group(0).answer.value, 'My sentence');
 });
 
 function translated(text = '第一句话。') {

@@ -5,6 +5,8 @@ import { mkdirSync, chmodSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { AuthProviderError } from './auth-providers.mjs';
+import { createPaymentClient, verifyNotification } from './payment-client.mjs';
+import { createMockPaymentProvider } from './payment-mock.mjs';
 
 const scrypt = promisify(nodeScrypt);
 const ROOT = path.dirname(fileURLToPath(import.meta.url));
@@ -19,6 +21,15 @@ const TOKEN_MS = 30 * 60000;
 const SESSION_COOKIE = 'zijian_session';
 const DEVICE_COOKIE = 'zijian_device';
 const TOKEN_RE = /^[A-Za-z0-9_-]{43}$/;
+const BILLING_PLANS = Object.freeze([
+  Object.freeze({ id: 'monthly', name: '月度套餐', amountFen: 990, days: 30, currency: 'CNY' }),
+  Object.freeze({ id: 'quarterly', name: '季度套餐', amountFen: 1990, days: 90, currency: 'CNY' }),
+  Object.freeze({ id: 'yearly', name: '年度套餐', amountFen: 5990, days: 365, currency: 'CNY' }),
+]);
+// Operator acceptance only: never included in the public catalogue or accepted
+// as a browser-selected plan. It uses the normal order and fulfilment pipeline.
+const PAYMENT_ACCEPTANCE_PLAN = Object.freeze({ id: 'acceptance_1fen', name: '支付接入验收', amountFen: 1, days: 1, currency: 'CNY' });
+const BILLING_REQUEST_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 export class AuthError extends Error {
   constructor(status, message, code = 'AUTH_ERROR', retryAfter) {
@@ -93,7 +104,7 @@ function setCookie(response, name, value, expiresAt, secure, timestamp) {
 function noProvider() { throw new AuthError(503, '发送服务尚未配置，请稍后重试。', 'PROVIDER_UNAVAILABLE'); }
 
 /** The database is private server state. No caller-provided time or browser flag grants access. */
-export function createAuthService({ filename = path.join(process.env.ZIJIAN_AUTH_DATA_DIR || path.join(ROOT, '.data'), 'auth.sqlite'), now = Date.now, providers = {}, drawStarterDays = () => randomInt(3, 8), drawReferralDays = () => randomInt(3, 8) } = {}) {
+export function createAuthService({ filename = path.join(process.env.ZIJIAN_AUTH_DATA_DIR || path.join(ROOT, '.data'), 'auth.sqlite'), now = Date.now, providers = {}, drawStarterDays = () => randomInt(3, 8), drawReferralDays = () => randomInt(3, 8), paymentOptions = {} } = {}) {
   if (typeof filename !== 'string' || !filename || typeof now !== 'function' || typeof drawStarterDays !== 'function' || typeof drawReferralDays !== 'function') throw new TypeError('Invalid authentication service configuration.');
   if (filename !== ':memory:') mkdirSync(path.dirname(path.resolve(filename)), { recursive: true, mode: 0o700 });
   const db = new DatabaseSync(filename);
@@ -180,6 +191,36 @@ export function createAuthService({ filename = path.join(process.env.ZIJIAN_AUTH
   if (!db.prepare('PRAGMA table_info(auth_users)').all().some(column => column.name === 'account_ends_at')) {
     db.exec('ALTER TABLE auth_users ADD COLUMN account_ends_at INTEGER');
   }
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS billing_orders (
+      order_no TEXT PRIMARY KEY, user_id TEXT NOT NULL REFERENCES auth_users(id), plan_id TEXT NOT NULL,
+      amount_fen INTEGER NOT NULL, days INTEGER NOT NULL, currency TEXT NOT NULL,
+      project_code TEXT, description TEXT, plan_name TEXT,
+      mode TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'UNPAID', active INTEGER NOT NULL DEFAULT 1,
+      payment_id TEXT UNIQUE, payment_status TEXT NOT NULL DEFAULT 'UNPAID',
+      created_at INTEGER NOT NULL, paid_at INTEGER, granted_at INTEGER, entitlement_ends_at INTEGER,
+      transaction_id TEXT UNIQUE, needs_attention INTEGER NOT NULL DEFAULT 0,
+      notification_status TEXT NOT NULL DEFAULT 'NONE'
+    );
+    CREATE UNIQUE INDEX IF NOT EXISTS billing_one_active ON billing_orders(user_id) WHERE active=1;
+    CREATE INDEX IF NOT EXISTS billing_orders_user ON billing_orders(user_id,created_at DESC);
+    CREATE TABLE IF NOT EXISTS billing_requests (
+      user_id TEXT NOT NULL REFERENCES auth_users(id), request_id TEXT NOT NULL,
+      order_no TEXT NOT NULL REFERENCES billing_orders(order_no), plan_id TEXT NOT NULL,
+      PRIMARY KEY(user_id,request_id)
+    );
+    CREATE TABLE IF NOT EXISTS billing_attempts (
+      id TEXT PRIMARY KEY, order_no TEXT NOT NULL REFERENCES billing_orders(order_no),
+      generation INTEGER NOT NULL, idempotency_key TEXT NOT NULL UNIQUE,
+      provider_attempt_id TEXT UNIQUE, status TEXT NOT NULL DEFAULT 'CREATING',
+      code_url TEXT, expires_at INTEGER, created_at INTEGER NOT NULL, last_error TEXT,
+      UNIQUE(order_no,generation)
+    );
+    CREATE TABLE IF NOT EXISTS billing_events (
+      event_id TEXT PRIMARY KEY, payload_hash TEXT NOT NULL, order_no TEXT NOT NULL REFERENCES billing_orders(order_no),
+      payment_id TEXT NOT NULL, transaction_id TEXT NOT NULL, received_at INTEGER NOT NULL
+    );
+  `);
   if (filename !== ':memory:') {
     try { chmodSync(filename, 0o600); } catch { /* Windows permissions are managed by the host. */ }
   }
@@ -207,6 +248,23 @@ export function createAuthService({ filename = path.join(process.env.ZIJIAN_AUTH
   const providerStatus = { sms: Boolean(providers.status?.sms), email: Boolean(providers.status?.email) };
   let closed = false;
   let lastCleanup = -Infinity;
+  const paymentMode = paymentOptions.mode || 'disabled';
+  if (!['disabled', 'mock', 'live'].includes(paymentMode)) { db.close(); throw new TypeError('Invalid payment mode.'); }
+  const mockProvider = paymentMode === 'mock' ? createMockPaymentProvider({ db, now: time,
+    receiveNotification: receivePaymentNotification, options: paymentOptions.mockOptions || {} }) : null;
+  const paymentConfig = mockProvider?.config || paymentOptions.config;
+  for (const column of ['project_code', 'description', 'plan_name']) {
+    if (!db.prepare('PRAGMA table_info(billing_orders)').all().some(item => item.name === column)) db.exec(`ALTER TABLE billing_orders ADD COLUMN ${column} TEXT`);
+  }
+  for (const row of db.prepare('SELECT order_no,plan_id,mode FROM billing_orders WHERE project_code IS NULL OR description IS NULL OR plan_name IS NULL').all()) {
+    const projectCode = row.mode === 'mock' ? 'type_mock' : paymentConfig?.projectCode || null;
+    const planName = (row.plan_id === PAYMENT_ACCEPTANCE_PLAN.id ? PAYMENT_ACCEPTANCE_PLAN : BILLING_PLANS.find(item => item.id === row.plan_id))?.name || '使用时长套餐';
+    const description = `火星叔叔雅思作文练习 - ${planName}`;
+    db.prepare('UPDATE billing_orders SET project_code=coalesce(project_code,?),description=coalesce(description,?),plan_name=coalesce(plan_name,?) WHERE order_no=?').run(projectCode, description, planName, row.order_no);
+  }
+  const paymentClient = paymentMode === 'disabled' ? null : createPaymentClient({ config: paymentConfig,
+    now: time, ...(mockProvider ? { fetchImpl: mockProvider.fetchImpl } : paymentOptions.fetchImpl ? { fetchImpl: paymentOptions.fetchImpl } : {}) });
+  const billingLocks = new Map();
 
   function time() {
     const timestamp = now();
@@ -467,7 +525,323 @@ export function createAuthService({ filename = path.join(process.env.ZIJIAN_AUTH
     });
   }
 
-  async function handle({ request, response, pathname, body = {}, origin, clientIp = '', secure = false }) {
+  function billingMetadata(allowMock = false) {
+    const enabled = paymentMode !== 'disabled' && (paymentMode !== 'mock' || allowMock);
+    return { mode: paymentMode, enabled, available: enabled, simulation: paymentMode === 'mock', plans: BILLING_PLANS };
+  }
+  function ensureBilling(allowMock) {
+    if (paymentMode === 'disabled') throw new AuthError(503, '支付功能暂未开放。', 'PAYMENT_DISABLED');
+    if (paymentMode === 'mock' && !allowMock) throw new AuthError(403, '模拟支付仅可在本地预览使用。', 'MOCK_PAYMENT_LOCAL_ONLY');
+  }
+  function findOrder(orderNo, userId) {
+    const row = db.prepare('SELECT * FROM billing_orders WHERE order_no=? AND user_id=?').get(orderNo, userId);
+    if (!row) throw new AuthError(404, '订单不存在。', 'ORDER_NOT_FOUND');
+    return row;
+  }
+  function currentAttempt(orderNo) {
+    return db.prepare('SELECT * FROM billing_attempts WHERE order_no=? ORDER BY generation DESC LIMIT 1').get(orderNo);
+  }
+  function orderView(row) {
+    const selected = currentAttempt(row.order_no), plan = BILLING_PLANS.find(item => item.id === row.plan_id);
+    let attemptStatus = selected?.status || 'CREATING';
+    if (row.status === 'PAID') attemptStatus = 'SUCCEEDED';
+    else if (attemptStatus === 'PENDING' && selected.expires_at != null && selected.expires_at <= time()) attemptStatus = 'EXPIRED';
+    return { orderNo: row.order_no, planId: row.plan_id, planName: row.plan_name || plan?.name || '使用时长套餐',
+      amountFen: row.amount_fen, days: row.days, currency: row.currency, status: row.status,
+      paymentStatus: row.payment_status, paymentId: row.payment_id, attemptId: selected?.provider_attempt_id || null,
+      attemptStatus, codeUrl: row.status === 'UNPAID' && row.payment_status === 'UNPAID' && attemptStatus === 'PENDING' ? selected.code_url : null,
+      expiresAt: selected?.expires_at || null, createdAt: row.created_at, paidAt: row.paid_at,
+      grantedAt: row.granted_at, entitlementEndsAt: row.entitlement_ends_at,
+      wechatTransactionId: row.transaction_id, needsAttention: Boolean(row.needs_attention),
+      notificationStatus: row.notification_status, mode: row.mode,
+      lastError: selected?.last_error || null, active: Boolean(row.active) };
+  }
+  function billingResult(request, deviceId, allowMock, extra = {}) {
+    return { ...state(request, deviceId, time()), billing: billingMetadata(allowMock), plans: BILLING_PLANS, ...extra };
+  }
+  async function orderLock(orderNo, operation) {
+    const previous = billingLocks.get(orderNo) || Promise.resolve();
+    let unlock;
+    const gate = new Promise(resolve => { unlock = resolve; });
+    const next = previous.catch(() => {}).then(() => gate);
+    billingLocks.set(orderNo, next);
+    await previous.catch(() => {});
+    try { return await operation(); }
+    finally { unlock(); if (billingLocks.get(orderNo) === next) billingLocks.delete(orderNo); }
+  }
+  function assertOrderMode(row) {
+    if (row.mode !== paymentMode) throw new AuthError(409, '此订单属于另一支付环境，请查看当前环境的订单。', 'PAYMENT_MODE_MISMATCH');
+    if (row.project_code !== paymentConfig?.projectCode) throw new AuthError(409, '此订单属于另一支付项目，请联系管理员。', 'PAYMENT_ORDER_MISMATCH');
+  }
+  function newAttempt(orderNo, timestamp) {
+    const selected = currentAttempt(orderNo), generation = (selected?.generation || 0) + 1;
+    db.prepare('INSERT INTO billing_attempts(id,order_no,generation,idempotency_key,created_at) VALUES(?,?,?,?,?)')
+      .run(randomUUID(), orderNo, generation, `type_${randomUUID()}`, timestamp);
+    return currentAttempt(orderNo);
+  }
+  function saveBillingIntent(userId, plan, requestId) {
+    return transaction(() => {
+      const previous = db.prepare('SELECT * FROM billing_requests WHERE user_id=? AND request_id=?').get(userId, requestId);
+      if (previous) {
+        if (previous.plan_id !== plan.id) throw new AuthError(409, '该请求已用于另一套餐。', 'ORDER_REQUEST_CONFLICT');
+        return findOrder(previous.order_no, userId);
+      }
+      const active = db.prepare('SELECT * FROM billing_orders WHERE user_id=? AND active=1').get(userId);
+      if (active && (active.plan_id !== plan.id || active.mode !== paymentMode)) throw new AuthError(409, '您还有未完成的订单，请先查看或关闭原订单。', 'ACTIVE_ORDER_EXISTS');
+      const no = active?.order_no || `type_${randomUUID().replaceAll('-', '')}`;
+      if (!active) {
+        db.prepare('INSERT INTO billing_orders(order_no,user_id,plan_id,amount_fen,days,currency,project_code,description,plan_name,mode,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?)')
+          .run(no, userId, plan.id, plan.amountFen, plan.days, plan.currency, paymentConfig.projectCode,
+            `火星叔叔雅思作文练习 - ${plan.name}`, plan.name, paymentMode, time());
+        newAttempt(no, time());
+      }
+      db.prepare('INSERT INTO billing_requests(user_id,request_id,order_no,plan_id) VALUES(?,?,?,?)').run(userId, requestId, no, plan.id);
+      return findOrder(no, userId);
+    });
+  }
+  function snapshotExpiry(value) {
+    if (typeof value === 'number' && Number.isSafeInteger(value) && value > 0) return value;
+    if (typeof value !== 'string' || !/^\d{4}-\d{2}-\d{2}T/.test(value)) return null;
+    const parsed = Date.parse(value);
+    return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : null;
+  }
+  function acceptSnapshot(orderNo, localAttemptId, payment) {
+    return transaction(() => {
+      const row = db.prepare('SELECT * FROM billing_orders WHERE order_no=?').get(orderNo);
+      const selected = db.prepare('SELECT * FROM billing_attempts WHERE id=? AND order_no=?').get(localAttemptId, orderNo);
+      if (!row || !selected || row.project_code !== paymentConfig.projectCode || payment.businessOrderNo !== row.order_no || payment.amountFen !== row.amount_fen
+        || payment.currency !== row.currency || (row.payment_id && row.payment_id !== payment.paymentId)) {
+        throw new AuthError(409, '支付记录与业务订单不一致，请联系管理员。', 'PAYMENT_ORDER_MISMATCH');
+      }
+      // Another application process may have started the next attempt while
+      // this query was in flight. Its stale snapshot cannot deactivate or
+      // overwrite the current attempt, nor regress a committed notification.
+      if (currentAttempt(orderNo).id !== selected.id || (row.status === 'PAID' && selected.provider_attempt_id !== payment.attemptId)) return row;
+      if (selected.provider_attempt_id && selected.provider_attempt_id !== payment.attemptId) throw new AuthError(409, '付款请求与业务订单不一致。', 'PAYMENT_ORDER_MISMATCH');
+      const otherPayment = db.prepare('SELECT order_no FROM billing_orders WHERE payment_id=? AND order_no<>?').get(payment.paymentId, orderNo);
+      const otherAttempt = db.prepare('SELECT order_no FROM billing_attempts WHERE provider_attempt_id=? AND id<>?').get(payment.attemptId, selected.id);
+      if (otherPayment || otherAttempt) throw new AuthError(409, '支付记录已绑定其他订单。', 'PAYMENT_ORDER_MISMATCH');
+      const paid = row.status === 'PAID', providerPaid = paid || payment.paymentStatus === 'PAID' || row.payment_status === 'PAID';
+      const status = paid ? 'SUCCEEDED' : payment.attemptStatus;
+      const usable = status === 'PENDING' && !providerPaid && typeof payment.codeUrl === 'string' && payment.codeUrl.length <= 8192;
+      db.prepare('UPDATE billing_attempts SET provider_attempt_id=?,status=?,code_url=?,expires_at=?,last_error=NULL WHERE id=?')
+        .run(payment.attemptId, status, usable ? payment.codeUrl : null, snapshotExpiry(payment.expiresAt), selected.id);
+      db.prepare('UPDATE billing_orders SET payment_id=?,payment_status=?,needs_attention=?,notification_status=?,active=? WHERE order_no=?')
+        .run(payment.paymentId, providerPaid ? 'PAID' : 'UNPAID', providerPaid && !paid ? 1 : 0,
+          paid ? 'ACK' : typeof payment.notificationStatus === 'string' ? payment.notificationStatus : row.notification_status,
+          paid || ['CLOSED', 'REJECTED'].includes(status) ? 0 : 1, orderNo);
+      return db.prepare('SELECT * FROM billing_orders WHERE order_no=?').get(orderNo);
+    });
+  }
+  function uncertainAttempt(selected, error) {
+    const code = typeof error?.code === 'string' && /^[A-Z0-9_]{1,64}$/.test(error.code) ? error.code : 'PAYMENT_RESULT_UNKNOWN';
+    db.prepare("UPDATE billing_attempts SET status=CASE WHEN provider_attempt_id IS NULL THEN 'UNKNOWN' ELSE status END,last_error=? WHERE id=? AND status<>'SUCCEEDED'")
+      .run(code, selected.id);
+  }
+  async function obtainPayment(orderNo, { createIfMissing = false, sync = false } = {}) {
+    let row = db.prepare('SELECT * FROM billing_orders WHERE order_no=?').get(orderNo), selected = currentAttempt(orderNo);
+    assertOrderMode(row);
+    if (row.status === 'PAID') return row;
+    let result;
+    try {
+      // A lost create response never allocates a second request. Reconcile the
+      // business number, then replay its exact persisted idempotency key only
+      // when the provider explicitly confirms there is no payment record.
+      if (selected.provider_attempt_id && row.payment_id) {
+        result = sync ? await paymentClient.syncPayment(row.payment_id) : await paymentClient.getPayment(row.payment_id);
+      } else if (selected.status !== 'CREATING' || !createIfMissing) {
+        try { result = await paymentClient.getByBusinessOrder(orderNo); }
+        catch (error) {
+          if (error.code !== 'NOT_FOUND' || !createIfMissing) throw error;
+        }
+      }
+      if (!result && createIfMissing) result = await paymentClient.createNativePayment({
+        businessOrderNo: row.order_no, amountFen: row.amount_fen,
+        description: row.description,
+        expiresInSeconds: 900,
+      }, selected.idempotency_key);
+      if (!result) return row;
+      row = acceptSnapshot(orderNo, selected.id, result.payment);
+      if (row.payment_status === 'PAID' && row.status !== 'PAID') {
+        // A query is useful for recovery, but time is only granted by the
+        // authenticated business notification, including in mock mode.
+        try {
+          const retried = await paymentClient.retryNotification(row.payment_id);
+          acceptSnapshot(orderNo, selected.id, retried.payment);
+        } catch { /* Keep PAID + needsAttention visible for safe retry. */ }
+      }
+      return db.prepare('SELECT * FROM billing_orders WHERE order_no=?').get(orderNo);
+    } catch (error) {
+      uncertainAttempt(selected, error);
+      // API transport failure means an uncertain order, never a cancelled one.
+      // The next GET or retry resumes the same order and idempotency key.
+      if (error.code === 'PAYMENT_ORDER_MISMATCH') throw error;
+      return db.prepare('SELECT * FROM billing_orders WHERE order_no=?').get(orderNo);
+    }
+  }
+  async function receivePaymentNotification({ request, rawTarget, rawBody, rawHeaders, headers, allowMock = false, mockInternal = false } = {}) {
+    if (closed) throw new AuthError(503, '账号服务暂时不可用。', 'AUTH_UNAVAILABLE');
+    ensureBilling(allowMock || mockInternal);
+    const event = verifyNotification({ method: request?.method || 'POST', rawTarget,
+      headers: headers || request?.headers, rawHeaders, rawBody, config: paymentConfig, now: time });
+    const payloadHash = hash(rawBody);
+    transaction(() => {
+      const row = db.prepare('SELECT * FROM billing_orders WHERE order_no=?').get(event.businessOrderNo);
+      if (!row || row.mode !== paymentMode) throw new AuthError(404, '通知对应的业务订单不存在。', 'PAYMENT_ORDER_NOT_FOUND');
+      if (event.projectCode !== row.project_code || event.amountFen !== row.amount_fen || event.currency !== row.currency
+        || (row.payment_id && row.payment_id !== event.paymentId)
+        || (row.transaction_id && row.transaction_id !== event.wechatTransactionId)) {
+        throw new AuthError(409, '支付通知与业务订单不一致。', 'PAYMENT_ORDER_MISMATCH');
+      }
+      const previous = db.prepare('SELECT * FROM billing_events WHERE event_id=?').get(event.eventId);
+      if (previous) {
+        if (previous.payload_hash !== payloadHash || previous.order_no !== row.order_no) throw new AuthError(409, '支付事件内容发生冲突。', 'PAYMENT_EVENT_CONFLICT');
+        return;
+      }
+      const transactionOwner = db.prepare('SELECT order_no FROM billing_orders WHERE transaction_id=? AND order_no<>?').get(event.wechatTransactionId, row.order_no);
+      const paymentOwner = db.prepare('SELECT order_no FROM billing_orders WHERE payment_id=? AND order_no<>?').get(event.paymentId, row.order_no);
+      if (transactionOwner || paymentOwner) throw new AuthError(409, '支付凭据已用于其他订单。', 'PAYMENT_ORDER_MISMATCH');
+      let selected = db.prepare('SELECT * FROM billing_attempts WHERE provider_attempt_id=?').get(event.attemptId);
+      if (selected && selected.order_no !== row.order_no) throw new AuthError(409, '付款请求与业务订单不一致。', 'PAYMENT_ORDER_MISMATCH');
+      if (!selected) {
+        selected = currentAttempt(row.order_no);
+        if (!selected || selected.provider_attempt_id || !['CREATING', 'UNKNOWN'].includes(selected.status)) throw new AuthError(409, '付款请求尚未匹配，请重试通知。', 'PAYMENT_ATTEMPT_MISMATCH');
+      }
+      const paidAt = Date.parse(event.paidAt);
+      if (paidAt < row.created_at - 300000 || paidAt > time() + 300000) throw new AuthError(409, '付款时间与业务订单不一致。', 'PAYMENT_ORDER_MISMATCH');
+      db.prepare('INSERT INTO billing_events(event_id,payload_hash,order_no,payment_id,transaction_id,received_at) VALUES(?,?,?,?,?,?)')
+        .run(event.eventId, payloadHash, row.order_no, event.paymentId, event.wechatTransactionId, time());
+      db.prepare("UPDATE billing_attempts SET provider_attempt_id=?,status='SUCCEEDED',code_url=NULL,last_error=NULL WHERE id=?").run(event.attemptId, selected.id);
+      if (row.status !== 'PAID') {
+        const grantedAt = time(), endsAt = grantDuration(row.user_id, row.days * DAY, grantedAt);
+        db.prepare('UPDATE auth_users SET paid_until=? WHERE id=?').run(endsAt, row.user_id);
+        db.prepare("UPDATE billing_orders SET status='PAID',payment_status='PAID',active=0,payment_id=?,paid_at=?,granted_at=?,entitlement_ends_at=?,transaction_id=?,needs_attention=0,notification_status='ACK' WHERE order_no=?")
+          .run(event.paymentId, paidAt, grantedAt, endsAt, event.wechatTransactionId, row.order_no);
+      }
+    });
+    // This ACK is returned only after both order and entitlement have committed.
+    return { eventId: event.eventId, status: 'ACK' };
+  }
+  // Trusted operator methods only. There is deliberately no HTTP admin route.
+  async function createPaymentAcceptanceOrder(input) {
+    if (closed) throw new AuthError(503, '账号服务暂时不可用。', 'AUTH_UNAVAILABLE');
+    ensureBilling(true);
+    if (!input || typeof input !== 'object' || Array.isArray(input)
+      || Object.keys(input).some(key => !['userId', 'requestId'].includes(key))
+      || typeof input.userId !== 'string' || !/^[A-Za-z0-9_-]{1,128}$/.test(input.userId)
+      || typeof input.requestId !== 'string' || !BILLING_REQUEST_ID.test(input.requestId)) {
+      throw new AuthError(400, '请指定既有账号和有效的验收请求编号。', 'INVALID_ACCEPTANCE_ORDER');
+    }
+    if (!db.prepare('SELECT id FROM auth_users WHERE id=?').get(input.userId)) throw new AuthError(404, '验收账号不存在，请先注册账号。', 'USER_NOT_FOUND');
+    const row = saveBillingIntent(input.userId, PAYMENT_ACCEPTANCE_PLAN, input.requestId);
+    const recovered = await orderLock(row.order_no, () => obtainPayment(row.order_no, { createIfMissing: true }));
+    return orderView(recovered);
+  }
+  function getBillingOrder(orderNo) {
+    if (closed) throw new AuthError(503, '账号服务暂时不可用。', 'AUTH_UNAVAILABLE');
+    const row = typeof orderNo === 'string' ? db.prepare('SELECT * FROM billing_orders WHERE order_no=?').get(orderNo) : null;
+    if (!row) throw new AuthError(404, '订单不存在。', 'ORDER_NOT_FOUND');
+    return orderView(row);
+  }
+  async function retryBillingNotification(orderNo) {
+    if (closed) throw new AuthError(503, '账号服务暂时不可用。', 'AUTH_UNAVAILABLE');
+    ensureBilling(true);
+    getBillingOrder(orderNo);
+    return orderLock(orderNo, async () => {
+      const row = db.prepare('SELECT * FROM billing_orders WHERE order_no=?').get(orderNo);
+      assertOrderMode(row);
+      if (row.payment_status !== 'PAID' || !row.payment_id) throw new AuthError(409, '此订单尚未确认付款，请先核实原订单状态。', 'NOT_PAID');
+      const result = await paymentClient.retryNotification(row.payment_id);
+      acceptSnapshot(orderNo, currentAttempt(orderNo).id, result.payment);
+      return getBillingOrder(orderNo);
+    });
+  }
+  async function handleBilling({ request, response, pathname, body, deviceId, secure, clientIp, allowMock }) {
+    if (request.method === 'GET' && pathname === '/api/billing/plans') {
+      if (!deviceId) {
+        deviceId = randomBytes(32).toString('base64url');
+        setCookie(response, DEVICE_COOKIE, `${deviceId}.${mac(`device:${deviceId}`)}`, time() + SESSION_MS, secure, time());
+      }
+      return billingResult(request, deviceId, allowMock);
+    }
+    ensureBilling(allowMock);
+    const user = requireUser(request, time());
+    const route = /^\/api\/billing\/orders(?:\/([A-Za-z0-9_-]{1,64})(?:\/(sync|close|retry|mock-complete|mock-notify-retry))?)?$/.exec(pathname);
+    if (!route) throw new AuthError(404, '接口不存在。', 'NOT_FOUND');
+    const orderNo = route[1], action = route[2];
+    if (request.method === 'GET' && !action) {
+      if (!orderNo) {
+        const orders = db.prepare('SELECT * FROM billing_orders WHERE user_id=? ORDER BY created_at DESC,rowid DESC LIMIT 20').all(user.id).map(orderView);
+        return billingResult(request, deviceId, allowMock, { orders });
+      }
+      const row = findOrder(orderNo, user.id);
+      const recovered = row.mode === paymentMode && row.status !== 'PAID'
+        ? await orderLock(orderNo, () => obtainPayment(orderNo)) : row;
+      return billingResult(request, deviceId, allowMock, { order: orderView(recovered) });
+    }
+    if (request.method !== 'POST' || (orderNo && !action) || (!orderNo && action)) throw new AuthError(405, '请求方法不受支持。', 'METHOD_NOT_ALLOWED');
+    if (!deviceId || !equal(request.headers?.['x-csrf-token'], mac(`csrf:${deviceId}`))) throw new AuthError(403, '页面验证已失效，请刷新后重试。', 'CSRF_INVALID');
+    if (!body || typeof body !== 'object' || Array.isArray(body)) throw new AuthError(400, '请求内容无效。', 'INVALID_BODY');
+    if (!orderNo) {
+      const plan = BILLING_PLANS.find(item => item.id === body.planId);
+      if (!plan || typeof body.requestId !== 'string' || !BILLING_REQUEST_ID.test(body.requestId)) throw new AuthError(400, '请选择有效套餐后重试。', 'INVALID_ORDER');
+      const allowed = new Set(['planId', 'requestId']);
+      if (Object.keys(body).some(key => !allowed.has(key))) throw new AuthError(400, '套餐价格和时长由服务器确定。', 'INVALID_ORDER');
+      rate('billing-create-user', user.id, 30, 3600000, time());
+      rate('billing-create-ip', clientIp, 120, 3600000, time());
+      const row = saveBillingIntent(user.id, plan, body.requestId);
+      const recovered = await orderLock(row.order_no, () => obtainPayment(row.order_no, { createIfMissing: true }));
+      return billingResult(request, deviceId, allowMock, { order: orderView(recovered) });
+    }
+    findOrder(orderNo, user.id);
+    rate('billing-action-user', user.id, 120, 60000, time());
+    const row = await orderLock(orderNo, async () => {
+      let order = findOrder(orderNo, user.id);
+      assertOrderMode(order);
+      if (action.startsWith('mock-') && paymentMode !== 'mock') throw new AuthError(403, '当前环境不支持模拟支付。', 'MOCK_PAYMENT_DISABLED');
+      if (action === 'mock-complete') {
+        await mockProvider.complete(orderNo);
+        return obtainPayment(orderNo);
+      }
+      if (action === 'mock-notify-retry') {
+        if (!order.payment_id) throw new AuthError(409, '支付请求尚未确认。', 'PAYMENT_RESULT_UNKNOWN');
+        const result = await paymentClient.retryNotification(order.payment_id);
+        acceptSnapshot(orderNo, currentAttempt(orderNo).id, result.payment);
+        return findOrder(orderNo, user.id);
+      }
+      order = await obtainPayment(orderNo, { sync: action === 'sync' || action === 'close' });
+      if (order.status === 'PAID') return order;
+      let selected = currentAttempt(orderNo);
+      if (action === 'close') {
+        // Always reconcile payment before attempting closure. A payment that
+        // wins this race is fulfilled; it is never relabelled as cancelled.
+        if (order.payment_status === 'PAID') return order;
+        if (!selected.provider_attempt_id) throw new AuthError(409, '付款请求结果尚未确认，请刷新原订单后再关闭。', 'PAYMENT_RESULT_UNKNOWN');
+        try { return acceptSnapshot(orderNo, selected.id, (await paymentClient.closeAttempt(selected.provider_attempt_id)).payment); }
+        catch (error) { uncertainAttempt(selected, error); return findOrder(orderNo, user.id); }
+      }
+      if (action === 'retry') {
+        if (order.payment_status === 'PAID') return order;
+        if (['CLOSED', 'REJECTED'].includes(selected.status)) {
+          transaction(() => {
+            order = findOrder(orderNo, user.id);
+            selected = currentAttempt(orderNo);
+            if (order.status === 'PAID' || !['CLOSED', 'REJECTED'].includes(selected.status)) return;
+            const active = db.prepare('SELECT order_no FROM billing_orders WHERE user_id=? AND active=1 AND order_no<>?').get(user.id, orderNo);
+            if (active) throw new AuthError(409, '请先完成或关闭当前订单。', 'ACTIVE_ORDER_EXISTS');
+            db.prepare('UPDATE billing_orders SET active=1 WHERE order_no=?').run(orderNo);
+            newAttempt(orderNo, time());
+          });
+          return obtainPayment(orderNo, { createIfMissing: true });
+        }
+        return obtainPayment(orderNo, { createIfMissing: true });
+      }
+      return order;
+    });
+    return billingResult(request, deviceId, allowMock, { order: orderView(row) });
+  }
+
+  async function handle({ request, response, pathname, body = {}, origin, clientIp = '', secure = false, allowMock = false }) {
     if (closed) throw new AuthError(503, '账号服务暂时不可用。', 'AUTH_UNAVAILABLE');
     const timestamp = time();
     if (timestamp >= lastCleanup + 3600000) {
@@ -480,6 +854,7 @@ export function createAuthService({ filename = path.join(process.env.ZIJIAN_AUTH
       lastCleanup = timestamp;
     }
     let deviceId = deviceIdentity(request);
+    if (pathname.startsWith('/api/billing/')) return handleBilling({ request, response, pathname, body, deviceId, secure, clientIp, allowMock });
     if (request.method === 'GET' && pathname === '/api/auth/session') {
       if (!deviceId) {
         deviceId = randomBytes(32).toString('base64url');
@@ -801,5 +1176,5 @@ export function createAuthService({ filename = path.join(process.env.ZIJIAN_AUTH
     return { user: user ? { id: user.id, email: user.email, phone: user.phone } : null, entitlement: access };
   }
 
-  return { handle, requireAccess, createCampaign, getCampaigns, setCampaignEnabled, close() { if (!closed) { closed = true; db.close(); } } };
+  return { handle, receivePaymentNotification, createPaymentAcceptanceOrder, getBillingOrder, retryBillingNotification, requireAccess, createCampaign, getCampaigns, setCampaignEnabled, close() { if (!closed) { closed = true; db.close(); } } };
 }

@@ -44,7 +44,7 @@
   const canPractice = () => hasAccess() || canStartGuest();
   const canClaim = () => !!state.user && state.starter?.status === "available";
   const expiryLabel = () => new Date(accessEnd()).toLocaleString("zh-CN", { hour12: false });
-  const isDialogOpen = () => dialog.open || plans.open || !!window.ZijianStarterWheel?.isOpen() || !!window.ZijianShare?.isOpen();
+  const isDialogOpen = () => dialog.open || plans.open || !!window.ZijianStarterWheel?.isOpen() || !!window.ZijianShare?.isOpen() || !!window.ZijianBilling?.isOpen();
   const drawnDays = () => state.starterDraw?.status === "pending" && Number.isInteger(state.starterDraw.days)
     && state.starterDraw.days >= 3 && state.starterDraw.days <= 7 ? state.starterDraw.days : 0;
   const accountName = () => state.user?.email || state.user?.phone || "我的账户";
@@ -98,7 +98,7 @@
     return true;
   }
 
-  async function request(path, body) {
+  async function request(path, body, isCurrent) {
     if (window.location.protocol === "file:") throw new Error("请通过网站或本地服务访问，才能开始体验。");
     if (body !== undefined && !state.csrfToken) {
       await refresh();
@@ -121,6 +121,11 @@
     } finally { clearTimeout(timeout); }
     let data;
     try { data = await response.json(); } catch { throw new Error("账户服务返回异常，请稍后重试。"); }
+    if (isCurrent && !isCurrent()) {
+      const error = new Error("账户已切换，请重新查看订单。");
+      error.code = "AUTH_STATE_CHANGED";
+      throw error;
+    }
     if (!response.ok) {
       if (response.status === 401 && path !== "/api/auth/login" && path !== "/api/auth/sms/login") void refresh();
       const error = new Error(typeof data.error === "string" ? data.error : "操作暂未完成，请稍后重试。");
@@ -130,6 +135,14 @@
     }
     if (body !== undefined) accept(data, true);
     return data;
+  }
+
+  async function billingRequest(path, body) {
+    await ready;
+    if (typeof path !== "string" || !/^\/api\/billing\/[A-Za-z0-9_/-]+$/u.test(path)) throw new Error("支付请求地址无效。");
+    const userId = state.user?.id || null;
+    const revision = stateRevision;
+    return request(path, body, () => (state.user?.id || null) === userId && stateRevision === revision);
   }
 
   async function refresh() {
@@ -273,7 +286,7 @@
       if (!state.user?.email || !state.user.emailVerified) actions.innerHTML += route(state.user?.email ? "验证邮箱" : "绑定邮箱", "bindEmail");
       if (SHOW_SMS_AUTH && !state.user?.phone && (!state.user?.email || state.user.emailVerified)) actions.innerHTML += route("绑定手机号", "bindPhone");
       if (state.user?.email) actions.innerHTML += route("修改密码", "changePassword");
-      actions.innerHTML += '<button type="button" class="auth-text-button" data-open-plans>查看套餐</button><button type="button" class="auth-text-button account-logout" data-logout>退出登录</button>';
+      actions.innerHTML += '<button type="button" class="auth-text-button" data-open-plans>查看套餐</button><button type="button" class="auth-text-button" data-open-billing-history>订单记录</button><button type="button" class="auth-text-button account-logout" data-logout>退出登录</button>';
       if (SHOW_SMS_AUTH && state.user?.email && !state.user.emailVerified && !state.user.phone) {
         const note = document.createElement("p");
         note.className = "auth-footnote";
@@ -301,12 +314,14 @@
     content.querySelector("[data-open-starter]")?.addEventListener("click", openStarterWheel);
     content.querySelector("[data-logout]")?.addEventListener("click", () => void logout());
     content.querySelector("[data-open-plans]")?.addEventListener("click", openPlans);
+    content.querySelector("[data-open-billing-history]")?.addEventListener("click", () => window.ZijianBilling?.openHistory());
     content.querySelector("[data-open-redeem]")?.addEventListener("click", openRedeem);
     content.querySelector("#authForm")?.addEventListener("submit", event => { event.preventDefault(); void submitForm(); });
     setBusy(busy);
   }
 
   function open(next = state.user ? "account" : SHOW_SMS_AUTH ? "sms" : "login", notice = "") {
+    window.ZijianBilling?.close();
     window.ZijianShare?.close();
     window.ZijianStarterWheel?.close();
     if (plans.open) plans.close();
@@ -316,6 +331,7 @@
   }
 
   function openPlans() {
+    window.ZijianBilling?.close();
     window.ZijianShare?.close();
     window.ZijianStarterWheel?.close();
     if (dialog.open) dialog.close();
@@ -502,6 +518,7 @@
   }
 
   function openStarterWheel() {
+    window.ZijianBilling?.close();
     window.ZijianShare?.close();
     if (dialog.open) dialog.close();
     if (plans.open) plans.close();
@@ -637,5 +654,5 @@
     if (resetToken) open("reset");
     else if (bindToken) await confirmEmail();
   });
-  window.ZijianAuth = Object.freeze({ hasAccess, canPractice, ensureAccess, runWithAccess, requireAccess, open, openPlans, openRedeem, isDialogOpen, refresh, ready, drawStarter, claimStarter: claim, openStarterRegistration, openStarterLogin, prepareReferral, getState: () => state });
+  window.ZijianAuth = Object.freeze({ hasAccess, canPractice, ensureAccess, runWithAccess, requireAccess, open, openPlans, openRedeem, isDialogOpen, refresh, ready, drawStarter, claimStarter: claim, openStarterRegistration, openStarterLogin, prepareReferral, billingRequest, getState: () => state });
 })();
