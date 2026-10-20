@@ -10,10 +10,11 @@ const { TextDecoder } = require('node:util');
 // This harness runs the actual browser controllers and comparison modules.
 // Layout and trusted mouse defaults still require browser validation. Native
 // ranges below exercise the real controllers' selection and context mapping.
-function createPage({ source = 'First sentence. Second sentence! Third sentence?', integrated = false, fetch, protocol = 'http:', onLearningReset, auth } = {}) {
+function createPage({ source = 'First sentence. Second sentence! Third sentence?', integrated = false, fetch, protocol = 'http:', onLearningReset, onProgressChange, auth } = {}) {
   const roots = new Map();
   const intervals = [];
   const frames = new Map();
+  const stored = new Map();
   let now = 0;
   let nextFrame = 0;
   let document;
@@ -117,7 +118,7 @@ function createPage({ source = 'First sentence. Second sentence! Third sentence?
     setAttribute(name, value) { this.attributes.set(name, String(value)); }
     getAttribute(name) { return this.attributes.get(name) ?? null; }
     removeAttribute(name) { this.attributes.delete(name); }
-    setSelectionRange(start, end) { this.selectionStart = start; this.selectionEnd = end; }
+    setSelectionRange(start, end, direction = 'none') { this.selectionStart = start; this.selectionEnd = end; this.selectionDirection = direction; }
     focus() { document.activeElement = this; }
     showModal() { this.open = true; }
     close() { this.open = false; this.emit('close'); }
@@ -171,6 +172,11 @@ function createPage({ source = 'First sentence. Second sentence! Third sentence?
     clearTimeout,
     fetch,
     location: { protocol },
+    localStorage: {
+      getItem: key => stored.get(key) ?? null,
+      setItem: (key, value) => { stored.set(key, String(value)); },
+      removeItem: key => { stored.delete(key); },
+    },
     performance: { now: () => now },
     requestAnimationFrame(callback) { frames.set(++nextFrame, callback); return nextFrame; },
     cancelAnimationFrame(id) { frames.delete(id); },
@@ -180,9 +186,11 @@ function createPage({ source = 'First sentence. Second sentence! Third sentence?
   if (auth) context.ZijianAuth = auth;
   context.innerHeight = 900;
   context.innerWidth = 900;
+  context.scrollY = 0;
   context.addEventListener = () => {};
   context.getSelection = () => nativeSelection;
-  context.scrollBy = () => {};
+  context.scrollTo = ({ top = 0 }) => { context.scrollY = top; };
+  context.scrollBy = ({ top = 0 }) => { context.scrollY += top; };
   const $ = id => document.getElementById(id);
   if (integrated) {
     $('selectionTranslationPopup').append(...[
@@ -194,7 +202,7 @@ function createPage({ source = 'First sentence. Second sentence! Third sentence?
   const scripts = ['typing-core.js', 'article-history.js', 'floating-timer.js', 'sentence-core.js', 'sentence-mode.js'];
   if (integrated) scripts.push('reference-selection.js', 'selection-translation.js', 'app.js');
   scripts.forEach(name => vm.runInContext(fs.readFileSync(path.join(__dirname, '..', name), 'utf8'), context, { filename: name }));
-  const controller = integrated ? null : context.SentencePractice.create({ source, title: 'My essay', kind: '我的范文', onLearningReset });
+  const controller = integrated ? null : context.SentencePractice.create({ source, title: 'My essay', kind: '我的范文', onLearningReset, onProgressChange });
   const groups = () => $('sentenceGroups').children;
   const find = (node, className) => descendants(node).filter(child => child.classList.contains(className));
   const group = index => {
@@ -2198,4 +2206,220 @@ test('the expression return shortcut works from each checked action without issu
     assert.equal(group.reviewPanel.hidden, true, targetName);
     assert.equal(calls, 1, targetName);
   }
+});
+
+test('sentence progress restores grouping, exact drafts, checked feedback, visibility and caret without requests or focus', async () => {
+  const original = createPage();
+  await original.size(2);
+  await original.type(0, ' First typo.\nSecond sentence!  ');
+  await original.type(1, 'Third sent');
+  await original.click(original.group(0).check);
+  await original.click(original.group(0).toggle);
+  original.group(1).answer.setSelectionRange(3, 8, 'backward');
+  original.group(1).answer.scrollTop = 180;
+  await original.group(1).answer.emit('select');
+  const snapshot = JSON.parse(JSON.stringify(original.controller.getProgress()));
+  let requests = 0, authorizations = 0, changes = 0;
+  const restored = createPage({
+    fetch: async () => { requests++; throw new Error('restoration must remain local'); },
+    auth: { canPractice: () => false, requireAccess: () => { authorizations++; return false; } },
+    onProgressChange: () => { changes++; },
+  });
+  assert.equal(restored.controller.restoreProgress(snapshot), true);
+  assert.equal(changes, 0);
+  assert.equal(requests, 0);
+  assert.equal(authorizations, 0);
+  assert.equal(restored.document.activeElement, null);
+  assert.equal(restored.groups().length, 2);
+  assert.equal(restored.$('sentencesPerGroup').value, '2');
+  assert.equal(restored.group(0).answer.value, ' First typo.\nSecond sentence!  ');
+  assert.equal(restored.group(0).checked.hidden, false);
+  assert.equal(restored.group(0).feedback.textContent, original.group(0).feedback.textContent);
+  assert.equal(restored.group(0).reference.hidden, true);
+  assert.equal(restored.group(0).answer.readOnly, true);
+  assert.equal(restored.group(1).answer.value, 'Third sent');
+  assert.equal(restored.group(1).answer.selectionStart, 3);
+  assert.equal(restored.group(1).answer.selectionEnd, 8);
+  assert.equal(restored.group(1).answer.selectionDirection, 'backward');
+  assert.equal(restored.group(1).answer.scrollTop, 180);
+  assert.equal(restored.controller.getResumeTarget(), restored.group(1).answer);
+  assert.equal(restored.$('sentenceTimerValue').textContent, '00:00');
+  assert.equal(restored.$('sentenceTimerState').textContent, '未开始');
+  assert.deepEqual(JSON.parse(JSON.stringify(restored.controller.getProgress())), snapshot);
+});
+
+test('restored strict results remain complete and point resume to checked content without moving focus', async () => {
+  const original = createPage();
+  await original.type(1, 'Second sentence!');
+  await original.click(original.group(1).check);
+  const next = createPage();
+  assert.equal(next.controller.restoreProgress(original.controller.getProgress()), true);
+  assert.equal(next.group(1).card.classList.contains('is-correct'), true);
+  assert.equal(next.$('sentenceProgress').textContent, '正确完成 1 / 3 组');
+  assert.equal(next.controller.getResumeTarget(), next.group(1).checked);
+  assert.equal(next.document.activeElement, null);
+});
+
+test('AI reviewed paraphrases restore as editable drafts rather than incorrect strict results', async () => {
+  const answer = 'English is something we study daily.';
+  const original = createPage({ source: 'We learn English every day.', fetch: async () => reviewed(answer) });
+  await original.type(0, answer);
+  await original.click(original.group(0).review);
+  const snapshot = original.controller.getProgress();
+  assert.equal(snapshot.groups[0].checked, false);
+  const next = createPage({ source: 'We learn English every day.' });
+  assert.equal(next.controller.restoreProgress(snapshot), true);
+  assert.equal(next.group(0).answer.value, answer);
+  assert.equal(next.group(0).answer.hidden, false);
+  assert.equal(next.group(0).checked.hidden, true);
+  assert.equal(next.group(0).feedback.textContent, '');
+});
+
+test('malformed or mismatched saved sentence states leave the current practice intact', async () => {
+  const page = createPage();
+  await page.type(0, 'My existing draft.');
+  const original = JSON.stringify(page.controller.getProgress());
+  for (const snapshot of [
+    null, {}, [], { groupSize: 0, groups: [] }, { groupSize: 1.5, groups: [] },
+    { groupSize: Number.MAX_VALUE, groups: [] },
+    { groupSize: 1, groups: [] },
+    { groupSize: 2, groups: [{ draft: '' }, { draft: 42 }] },
+    { groupSize: 3, groups: [{ draft: 'a'.repeat(1000001) }] },
+  ]) {
+    assert.equal(page.controller.restoreProgress(snapshot), false);
+    assert.equal(JSON.stringify(page.controller.getProgress()), original);
+  }
+});
+
+test('saved caret, direction and active group are safely clamped while valid text is retained', () => {
+  const page = createPage();
+  assert.equal(page.controller.restoreProgress({ groupSize: 2, activeGroup: 1000, groups: [
+    { draft: 'first', selectionStart: -4, selectionEnd: 100, selectionDirection: 'malformed' },
+    { draft: 'second', selectionStart: 5, selectionEnd: 1, selectionDirection: 'backward', referenceVisible: false },
+  ] }), true);
+  const state = page.controller.getProgress();
+  assert.equal(state.activeGroup, 1);
+  assert.equal(state.groups[0].selectionStart, 0);
+  assert.equal(state.groups[0].selectionEnd, 5);
+  assert.equal(state.groups[0].selectionDirection, 'none');
+  assert.equal(state.groups[1].selectionStart, 5);
+  assert.equal(state.groups[1].selectionEnd, 5);
+  assert.equal(state.groups[1].referenceVisible, false);
+});
+
+test('progress callbacks track drafts, caret, active group, references, checks and edit but not unchanged events', async () => {
+  const snapshots = [];
+  const page = createPage({ onProgressChange: state => snapshots.push(state) });
+  assert.equal(snapshots.length, 0);
+  await page.type(0, 'Draft.');
+  assert.equal(snapshots.at(-1).groups[0].draft, 'Draft.');
+  page.group(0).answer.setSelectionRange(2, 2);
+  await page.group(0).answer.emit('keyup');
+  assert.equal(snapshots.at(-1).groups[0].selectionStart, 2);
+  const before = snapshots.length;
+  await page.group(0).answer.emit('pointerup');
+  assert.equal(snapshots.length, before);
+  await page.group(1).reference.emit('pointerup');
+  assert.equal(snapshots.at(-1).activeGroup, 1);
+  await page.click(page.group(1).toggle);
+  assert.equal(snapshots.at(-1).groups[1].referenceVisible, false);
+  await page.click(page.group(0).check);
+  assert.equal(snapshots.at(-1).groups[0].checked, true);
+  await page.click(page.group(0).edit);
+  assert.equal(snapshots.at(-1).groups[0].checked, false);
+});
+
+test('sentence progress notifications wait for IME completion and capture the finished value once', async () => {
+  const snapshots = [];
+  const page = createPage({ onProgressChange: state => snapshots.push(state) });
+  const answer = page.group(1).answer;
+  await answer.emit('compositionstart');
+  answer.value = '中';
+  await answer.emit('input', { isComposing: true });
+  await answer.emit('select');
+  assert.equal(snapshots.length, 0);
+  answer.value = '中文';
+  answer.setSelectionRange(2, 2);
+  await answer.emit('compositionend');
+  await answer.emit('input');
+  assert.equal(snapshots.length, 1);
+  assert.equal(snapshots[0].groups[1].draft, '中文');
+  assert.equal(snapshots[0].activeGroup, 1);
+});
+
+test('sentence composition state stays observable until completion and clears on reset', async () => {
+  const page = createPage();
+  assert.equal(page.controller.isComposing(), false);
+  await page.group(1).answer.emit('compositionstart');
+  assert.equal(page.controller.isComposing(), true);
+  await page.group(1).answer.emit('input');
+  assert.equal(page.controller.isComposing(), true);
+  await page.group(1).answer.emit('compositionend');
+  assert.equal(page.controller.isComposing(), false);
+  await page.group(0).answer.emit('compositionstart');
+  page.controller.reset();
+  assert.equal(page.controller.isComposing(), false);
+});
+
+test('regroup, restart and source changes publish a fresh sentence state while keeping current grouping', async () => {
+  const snapshots = [];
+  const page = createPage({ onProgressChange: state => snapshots.push(state) });
+  await page.type(1, 'Keep this until reset.');
+  await page.size(2);
+  assert.equal(snapshots.at(-1).groupSize, 2);
+  assert.equal(snapshots.at(-1).groups.length, 2);
+  assert.equal(snapshots.at(-1).groups.every(group => group.draft === ''), true);
+  await page.type(1, 'Clear on restart.');
+  page.controller.reset();
+  assert.equal(snapshots.at(-1).groupSize, 2);
+  assert.equal(snapshots.at(-1).activeGroup, 0);
+  assert.equal(snapshots.at(-1).groups.every(group => group.draft === ''), true);
+  page.controller.setSource('New article. One more.', 'Next', '我的范文');
+  assert.equal(snapshots.at(-1).groups.length, 1);
+  assert.equal(snapshots.at(-1).groupSize, 2);
+  assert.equal(page.document.activeElement, null);
+});
+
+test('textarea scrolling publishes and restores per-group offsets after an inactive mode becomes visible', async () => {
+  const snapshots = [];
+  const page = createPage({ onProgressChange: state => snapshots.push(state) });
+  await page.type(0, 'Long draft\n'.repeat(30));
+  page.group(0).answer.scrollTop = 234;
+  await page.group(0).answer.emit('scroll');
+  assert.equal(snapshots.at(-1).groups[0].scrollTop, 234);
+  const next = createPage();
+  next.controller.setActive(false);
+  assert.equal(next.controller.restoreProgress(page.controller.getProgress()), true);
+  assert.equal(next.controller.getProgress().groups[0].scrollTop, 234);
+  next.controller.setActive(true);
+  assert.equal(next.group(0).answer.scrollTop, 234);
+  assert.equal(next.document.activeElement, null);
+});
+
+test('checked drafts retain their textarea scroll offset until returning to input', async () => {
+  const page = createPage();
+  await page.type(0, 'First sentence.');
+  page.group(0).answer.scrollTop = 70;
+  await page.click(page.group(0).check);
+  const next = createPage();
+  assert.equal(next.controller.restoreProgress(page.controller.getProgress()), true);
+  assert.equal(next.controller.getProgress().groups[0].scrollTop, 70);
+  await next.click(next.group(0).edit);
+  assert.equal(next.group(0).answer.scrollTop, 70);
+});
+
+test('sentence restore shares the aggregate million-character limit and permits larger individual drafts', () => {
+  const page = createPage();
+  assert.equal(page.controller.restoreProgress({ groupSize: 2, groups: [
+    { draft: 'a'.repeat(500000), scrollTop: -5 }, { draft: 'b'.repeat(500000), scrollTop: Infinity },
+  ] }), true);
+  const current = page.controller.getProgress();
+  assert.equal(current.groups[0].draft.length, 500000);
+  assert.equal(current.groups[1].draft.length, 500000);
+  assert.equal(current.groups[0].scrollTop, 0);
+  assert.equal(current.groups[1].scrollTop, 0);
+  assert.equal(page.controller.restoreProgress({ groupSize: 2, groups: [
+    { draft: 'a'.repeat(500000) }, { draft: 'b'.repeat(500001) },
+  ] }), false);
+  assert.equal(page.controller.getProgress().groups[1].draft.length, 500000);
 });

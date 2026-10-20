@@ -62,15 +62,30 @@ function createPage({ protocol = 'http:', fetcher, source = '', optionalUI = tru
     }
     return null;
   }
-  document.createRange = () => {
-    let root, node, offset;
-    return { selectNodeContents(value) { root = value; }, setEnd(value, position) { node = value; offset = position; },
+  function fixtureDOMRange(startContainer, startOffset, endContainer, endOffset,
+    rect = { left: 20, top: 100, bottom: 125, right: 170, width: 150, height: 25 }, rects) {
+    return {
+      startContainer, startOffset, endContainer, endOffset,
+      selectNodeContents(value) {
+        this.setStart(value, 0);
+        this.setEnd(value, value.nodeType === 3 ? value.textContent.length : value.childNodes.length);
+      },
+      setStart(value, offset) { this.startContainer = value; this.startOffset = offset; },
+      setEnd(value, offset) { this.endContainer = value; this.endOffset = offset; },
+      cloneRange() { return fixtureDOMRange(this.startContainer, this.startOffset, this.endContainer, this.endOffset, rect, rects); },
+      getBoundingClientRect: () => rect,
+      getClientRects: () => rects || [rect],
       toString() {
-        const length = offsetWithin(root, node, offset);
-        if (length === null) throw new Error('Range endpoint missing');
-        return root.textContent.slice(0, length);
-      } };
-  };
+        let root = this.startContainer;
+        while (root && offsetWithin(root, this.endContainer, this.endOffset) === null) root = root.parentNode || root.parentElement;
+        if (!root) throw new Error('Range endpoint missing');
+        const start = offsetWithin(root, this.startContainer, this.startOffset);
+        const end = offsetWithin(root, this.endContainer, this.endOffset);
+        return root.textContent.slice(start, end);
+      },
+    };
+  }
+  document.createRange = () => fixtureDOMRange();
   const window = new Target();
   window.window = window;
   window.document = document;
@@ -82,6 +97,16 @@ function createPage({ protocol = 'http:', fetcher, source = '', optionalUI = tru
   if (viewport) window.visualViewport = Object.assign(new Target(), viewport);
   let nativeSelection = null;
   window.getSelection = () => nativeSelection;
+  function setNativeRange(range, { rawText } = {}) {
+    nativeSelection = {
+      isCollapsed: false, rangeCount: 1,
+      get anchorNode() { return range?.startContainer; },
+      get focusNode() { return range?.endContainer; },
+      toString: () => rawText ?? range?.toString() ?? '', getRangeAt: () => range,
+      removeAllRanges() { this.isCollapsed = true; this.rangeCount = 0; range = null; rawText = undefined; },
+      addRange(value) { range = value; rawText = undefined; this.isCollapsed = false; this.rangeCount = 1; },
+    };
+  }
   const requests = [];
   window.fetch = async (url, options) => {
     const body = JSON.parse(options.body);
@@ -90,7 +115,7 @@ function createPage({ protocol = 'http:', fetcher, source = '', optionalUI = tru
   };
   const names = ['input', 'display', 'area', 'popup', 'sourceLabel', 'translationLabel', 'statusLabel', 'retryButton', 'closeButton',
     ...(optionalUI ? ['typeLabel', 'briefContainer', 'detailsContainer', 'expandButton'] : []),
-    ...(touchUI ? ['learnAction', 'learnButton'] : [])];
+    ...(touchUI ? ['learnAction', 'learnButton', 'sentenceButton'] : [])];
   const elements = Object.fromEntries(names.map(name => [name, new Element()]));
   elements.input.parentElement = elements.area;
   elements.display.parentElement = elements.area;
@@ -106,12 +131,16 @@ function createPage({ protocol = 'http:', fetcher, source = '', optionalUI = tru
   elements.popup.rect = { width: 330, height: 190 };
   if (elements.learnAction) {
     elements.learnAction.hidden = true;
-    elements.learnAction.append(elements.learnButton);
+    elements.learnAction.append(elements.learnButton, elements.sentenceButton);
+    elements.sentenceButton.textContent = '整句';
+    elements.sentenceButton.hidden = true;
   }
   let active = true;
   let primaryActive = true;
   const additionalSources = [];
-  vm.runInContext(fs.readFileSync(path.join(__dirname, '..', 'selection-translation.js'), 'utf8'), vm.createContext(window));
+  const context = vm.createContext(window);
+  vm.runInContext(fs.readFileSync(path.join(__dirname, '..', 'sentence-core.js'), 'utf8'), context);
+  vm.runInContext(fs.readFileSync(path.join(__dirname, '..', 'selection-translation.js'), 'utf8'), context);
   const controller = window.SelectionTranslation.create({ ...elements, isActive: () => active, getReferenceText: () => source,
     isPrimaryActive: () => primaryActive, getAdditionalSources: () => additionalSources });
   return {
@@ -134,12 +163,9 @@ function createPage({ protocol = 'http:', fetcher, source = '', optionalUI = tru
     selectAdditional(source, start = 0, end = source.display.textContent.length,
       { rect = { left: 80, right: 230, top: 210, bottom: 235, width: 150, height: 25 }, rects, rawText } = {}) {
       const node = source.display.childNodes[0];
-      const range = { startContainer: node, startOffset: start, endContainer: node, endOffset: end,
-        getBoundingClientRect: () => rect, getClientRects: () => rects || [rect] };
-      range.cloneRange = () => range;
+      const range = fixtureDOMRange(node, start, node, end, rect, rects);
       document.activeElement = source.display;
-      nativeSelection = { isCollapsed: false, rangeCount: 1, anchorNode: node, focusNode: node,
-        toString: () => rawText ?? source.display.textContent.slice(start, end), getRangeAt: () => range };
+      setNativeRange(range, { rawText });
       return document.emit('selectionchange');
     },
     selectAcrossBoundary(source, { edge = 'end', reverse = false, outsideText = '\n\n' } = {}) {
@@ -209,13 +235,10 @@ function createPage({ protocol = 'http:', fetcher, source = '', optionalUI = tru
         return { node: elements.display, offset: elements.display.childNodes.length };
       }
       const from = endpoint(start), to = endpoint(end);
-      const text = actual.slice(start, end);
       const rect = { left: 20, top: 100, bottom: 125, width: 150, height: 25 };
-      const range = { startContainer: from.node, startOffset: from.offset, endContainer: to.node, endOffset: to.offset,
-        getBoundingClientRect: () => rect };
+      const range = fixtureDOMRange(from.node, from.offset, to.node, to.offset, rect);
       document.activeElement = elements.display;
-      nativeSelection = { isCollapsed: false, rangeCount: 1, anchorNode: from.node, focusNode: to.node,
-        toString: () => text, getRangeAt: () => ({ cloneRange: () => range }) };
+      setNativeRange(range);
       return document.emit('selectionchange');
     },
     selectInput(text, start = 0, end = text.length) {
@@ -271,6 +294,16 @@ function createPage({ protocol = 'http:', fetcher, source = '', optionalUI = tru
         await document.emit('selectionchange');
       }
       return elements.learnButton.emit('click');
+    },
+    async pressSentenceButton({ collapse = true } = {}) {
+      await elements.sentenceButton.emit('pointerdown', { pointerType: 'touch', button: 0 });
+      await document.emit('pointerdown', { target: elements.sentenceButton, pointerType: 'touch', button: 0 });
+      if (collapse) {
+        document.activeElement = elements.sentenceButton;
+        nativeSelection?.removeAllRanges?.();
+        await document.emit('selectionchange');
+      }
+      return elements.sentenceButton.emit('click');
     },
   };
 }
@@ -1537,6 +1570,180 @@ test('releasing a pressed learning action outside its bounds discards its snapsh
     assert.equal(page.learnAction.hidden, true);
     await page.learnButton.emit('click');
     assert.equal(page.requests.length, 0);
+    assert.equal(page.popup.hidden, true);
+  }
+});
+
+test('a reliable word exposes independent word and whole-sentence actions without an automatic request', async () => {
+  const source = 'Daily practice brings lasting progress. Keep going.';
+  const page = createPage({ source });
+  const start = source.indexOf('progress');
+  await page.selectRange(start, start + 'progress'.length);
+  await page.doubleClick();
+  assert.equal(page.learnAction.hidden, false);
+  assert.equal(page.learnButton.textContent, '翻译与学习 · 单词');
+  assert.equal(page.sentenceButton.hidden, false);
+  assert.equal(page.sentenceButton.textContent, '整句');
+  assert.equal(page.requests.length, 0);
+  await page.learnButton.emit('click');
+  assert.equal(page.requests.length, 1);
+  assert.equal(page.requests[0].text, 'progress', 'the original action remains selected-word only');
+  assert.equal(page.requests[0].context.sentence, 'Daily practice brings lasting progress.');
+});
+
+test('the whole-sentence action expands the native range to the exact second repeated sentence', async () => {
+  const source = 'Keep making progress. Keep making progress. Final sentence.';
+  const page = createPage({ source });
+  const start = source.indexOf('progress', source.indexOf('progress') + 1);
+  await page.selectRange(start, start + 'progress'.length);
+  assert.equal(page.sentenceButton.hidden, false);
+  assert.equal(page.requests.length, 0);
+  await page.sentenceButton.emit('pointerdown', { pointerType: 'mouse', button: 0 });
+  assert.equal(page.requests.length, 0, 'pressing the action cannot request AI before click');
+  await page.sentenceButton.emit('click');
+  assert.equal(page.window.getSelection().toString(), 'Keep making progress.');
+  const range = page.window.getSelection().getRangeAt(0);
+  const prefix = page.document.createRange();
+  prefix.selectNodeContents(page.display);
+  prefix.setEnd(range.startContainer, range.startOffset);
+  assert.equal(prefix.toString().length, 22, 'the second occurrence is highlighted rather than the first');
+  assert.equal(page.requests.length, 1);
+  assert.equal(page.requests[0].text, 'Keep making progress.');
+  assert.equal(page.requests[0].context.paragraph, source);
+});
+
+test('whole-sentence expansion shares abbreviation, initial, decimal and UTF-16 boundaries', async () => {
+  const cases = [
+    { source: 'Before. Dr. J. Smith paid 3.14 dollars. Next.', selection: 'Smith', expected: 'Dr. J. Smith paid 3.14 dollars.' },
+    { source: 'First 😀 sentence. Another 😀 word\ncontinues here. Final.', selection: 'word', expected: 'Another 😀 word\ncontinues here.' },
+    { source: 'First paragraph\n\nA final\nwrapped phrase', selection: 'wrapped', expected: 'A final\nwrapped phrase' },
+  ];
+  for (const { source, selection, expected } of cases) {
+    const page = createPage({ source });
+    const start = source.indexOf(selection);
+    await page.selectRange(start, start + selection.length);
+    assert.equal(page.sentenceButton.hidden, false, selection);
+    assert.equal(page.requests.length, 0);
+    await page.sentenceButton.emit('click');
+    assert.equal(page.requests.length, 1, selection);
+    assert.equal(page.requests[0].text, expected);
+    assert.equal(page.window.getSelection().toString(), expected);
+  }
+});
+
+test('partial phrases use a selection label and complete or multiple sentences keep one action', async () => {
+  const source = 'Practice brings lasting progress. Keep going. Final sentence.';
+  const cases = [
+    { text: 'brings lasting', label: '翻译与学习 · 选区', sentence: true },
+    { text: 'Practice brings lasting progress.', label: '翻译与学习', sentence: false },
+    { text: 'Practice brings lasting progress. Keep going.', label: '翻译与学习', sentence: false },
+    { text: 'progress. Keep', label: '翻译与学习', sentence: false },
+  ];
+  for (const { text, label, sentence } of cases) {
+    const page = createPage({ source });
+    const start = source.indexOf(text);
+    await page.selectRange(start, start + text.length);
+    assert.equal(page.learnButton.textContent, label, text);
+    assert.equal(page.sentenceButton.hidden, !sentence, text);
+    assert.equal(page.requests.length, 0);
+  }
+});
+
+test('sentence-group expansion uses local normalized text and maps the resulting sentence into article context', async () => {
+  const article = 'Introduction.\n\nFirst sentence.   \nSecond sentence has progress.\n\nConclusion.';
+  const text = 'First sentence. Second sentence has progress.';
+  const page = createPage();
+  page.primaryActive(false);
+  const secondLocal = text.indexOf('Second');
+  const secondArticle = article.indexOf('Second');
+  const calls = [];
+  const source = page.addSource(text, { mapRange(start, end) {
+    calls.push([start, end]);
+    return { source: article, start: secondArticle + start - secondLocal, end: secondArticle + end - secondLocal };
+  } });
+  const start = text.indexOf('progress');
+  await page.selectAdditional(source, start, start + 'progress'.length);
+  assert.equal(page.sentenceButton.hidden, false);
+  assert.equal(page.requests.length, 0);
+  await page.sentenceButton.emit('click');
+  assert.equal(page.requests.length, 1);
+  assert.equal(page.requests[0].text, 'Second sentence has progress.');
+  assert.equal(page.window.getSelection().toString(), 'Second sentence has progress.');
+  assert.equal(page.requests[0].context.sentence, 'Second sentence has progress.');
+  assert.equal(page.requests[0].context.paragraph, 'First sentence.   \nSecond sentence has progress.');
+  assert.ok(calls.some(([from, to]) => from === secondLocal && to === text.length));
+});
+
+test('whole-sentence action survives native touch collapse and expands only after an explicit click', async () => {
+  const source = 'Daily practice brings progress.';
+  const page = createPage({ source, touchPoints: 1 });
+  await page.selectRange(6, 14);
+  assert.equal(page.requests.length, 0);
+  await page.pressSentenceButton();
+  assert.equal(page.requests.length, 1);
+  assert.equal(page.requests[0].text, source);
+  assert.equal(page.window.getSelection().toString(), source);
+});
+
+test('unreliable offsets and overlong whole-sentence targets retain the safe selected-text action only', async () => {
+  const unreliable = createPage({ source: 'A reliable source sentence.' });
+  await unreliable.selectDisplay('source');
+  assert.equal(unreliable.sentenceButton.hidden, true);
+  assert.equal(unreliable.learnButton.textContent, '翻译与学习');
+  const source = `Target ${'long '.repeat(420)}sentence.`;
+  const long = createPage({ source });
+  await long.selectRange(0, 6);
+  assert.equal(long.sentenceButton.hidden, true);
+  await long.learnButton.emit('click');
+  assert.equal(long.requests.length, 1);
+  assert.equal(long.requests[0].text, 'Target');
+});
+
+test('changed or unavailable sources invalidate a pressed whole-sentence action before any request', async () => {
+  const source = 'Original practice brings progress.';
+  const changes = [
+    page => page.reference('A replacement article.'),
+    page => { page.display.hidden = true; },
+    page => page.primaryActive(false),
+    page => page.selectRange(0, 8),
+  ];
+  for (const change of changes) {
+    const page = createPage({ source, touchPoints: 1 });
+    await page.selectRange(source.indexOf('progress'), source.indexOf('progress') + 8);
+    await page.sentenceButton.emit('pointerdown', { pointerType: 'touch', button: 0 });
+    await change(page);
+    await page.sentenceButton.emit('click');
+    assert.equal(page.requests.length, 0);
+    assert.equal(page.popup.hidden, true);
+    assert.equal(page.learnAction.hidden, true);
+  }
+  for (const change of [reference => { reference.display.hidden = true; },
+    (reference, page) => page.removeSource(reference), reference => { reference.getReferenceText = () => 'Changed article.'; }]) {
+    const page = createPage({ touchPoints: 1 });
+    const reference = page.addSource(source);
+    await page.selectAdditional(reference, source.indexOf('progress'), source.indexOf('progress') + 8);
+    await page.sentenceButton.emit('pointerdown', { pointerType: 'touch', button: 0 });
+    change(reference, page);
+    await page.sentenceButton.emit('click');
+    assert.equal(page.requests.length, 0);
+    assert.equal(page.popup.hidden, true);
+  }
+});
+
+test('releasing on the other split action or outside the pressed sentence button cancels its snapshot', async () => {
+  for (const target of ['learnButton', 'sentenceButton', 'outside']) {
+    const source = 'A cancelled sentence action.';
+    const page = createPage({ source, touchPoints: 1 });
+    await page.selectRange(2, 11);
+    await page.sentenceButton.emit('pointerdown', { pointerType: 'touch', pointerId: 11, button: 0,
+      clientX: 250, clientY: 180 });
+    page.document.activeElement = page.sentenceButton;
+    page.window.getSelection().removeAllRanges();
+    await page.document.emit('selectionchange');
+    await page.document.emit('pointerup', { target: page[target] || {}, pointerType: 'touch', pointerId: 11,
+      clientX: target === 'sentenceButton' ? 10 : 250, clientY: target === 'sentenceButton' ? 5 : 180 });
+    await page.sentenceButton.emit('click');
+    assert.equal(page.requests.length, 0, target);
     assert.equal(page.popup.hidden, true);
   }
 });

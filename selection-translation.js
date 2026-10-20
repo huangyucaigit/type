@@ -6,7 +6,7 @@
   const TYPE_LABELS = { word: "单词", phrase: "短语", sentence: "句子", passage: "多句或段落", fragment: "不完整片段" };
 
   function create({ input, display, area, popup, sourceLabel, translationLabel, statusLabel,
-    retryButton, closeButton, typeLabel, briefContainer, detailsContainer, expandButton, learnAction, learnButton,
+    retryButton, closeButton, typeLabel, briefContainer, detailsContainer, expandButton, learnAction, learnButton, sentenceButton,
     getReferenceText = () => "", isActive = () => true,
     isPrimaryActive = () => true, getAdditionalSources = () => [] }) {
     const cache = new Map();
@@ -21,6 +21,7 @@
     let pressedSelection = null;
     let actionPressed = false;
     let actionPointerId = null;
+    let pressedButton = null;
     let selectingWithMouse = false;
     let selectionPoint = null;
     let touchInteraction = Boolean(window.navigator?.maxTouchPoints > 0);
@@ -146,7 +147,12 @@
       let sentenceEnd = paragraph.length;
       // Native English segmentation handles abbreviations more reliably than
       // punctuation alone. Keep a conservative fallback for older browsers.
-      if (typeof Intl.Segmenter === "function") {
+      if (typeof window.SentenceCore?.sentenceRanges === "function") {
+        const segments = window.SentenceCore.sentenceRanges(paragraph);
+        const first = segments.find(part => part.end > relativeStart);
+        const last = segments.find(part => part.end >= relativeEnd);
+        if (first && last) { sentenceStart = first.start; sentenceEnd = last.end; }
+      } else if (typeof Intl.Segmenter === "function") {
         const segments = Array.from(new Intl.Segmenter("en", { granularity: "sentence" }).segment(paragraph));
         const first = segments.find(part => part.index + part.segment.length > relativeStart);
         const last = segments.find(part => part.index + part.segment.length >= relativeEnd);
@@ -177,7 +183,7 @@
       const reliable = trimmedStart !== null && trimmedEnd !== null
         && source.slice(trimmedStart, trimmedEnd) === selected.text;
       const context = reliable ? contextAt(source, trimmedStart, trimmedEnd) : { sentence: "", paragraph: "" };
-      return { ...selected, context,
+      return { ...selected, context, sourceText: reliable ? source : null, start: reliable ? trimmedStart : null, end: reliable ? trimmedEnd : null,
         key: `${selected.kind}:${trimmedStart !== null && trimmedEnd !== null ? `${trimmedStart}:${trimmedEnd}` : "unknown"}:${selected.text}:${JSON.stringify(context)}` };
     }
 
@@ -204,7 +210,7 @@
           }
         } catch { /* Keep selected-text analysis when the source mapping fails. */ }
       }
-      return { text, kind: "additional", range, area: source.area || source.display,
+      return { text, kind: "additional", range, area: source.area || source.display, start, end,
         sourceDisplay: source.display, localReference: referenceText, context,
         key: `additional:${sourceIdentity(source.display)}:${start}:${end}:${text}:${JSON.stringify(context)}` };
     }
@@ -316,6 +322,61 @@
       pressedSelection = null;
       actionPressed = false;
       actionPointerId = null;
+      pressedButton = null;
+    }
+
+    function sentenceTarget(selected) {
+      if (!sentenceButton || !sourceAvailable(selected) || !Number.isInteger(selected.start) || !Number.isInteger(selected.end)) return null;
+      const source = selected.kind === "additional" ? selected.localReference : selected.sourceText;
+      if (typeof source !== "string" || source.slice(selected.start, selected.end) !== selected.text) return null;
+      const span = window.SentenceCore?.sentenceRanges?.(source)?.find(part => part.start <= selected.start && part.end >= selected.end);
+      if (!span || span.text.length > MAX_TEXT_LENGTH || span.text === selected.text || !/[A-Za-z]/.test(span.text)) return null;
+      if (selected.kind === "input") {
+        const value = String(input.value || "");
+        if (value.slice(span.start, span.end) !== span.text || typeof input.setSelectionRange !== "function") return null;
+        return { ...span, input: true };
+      }
+      const sourceDisplay = selected.kind === "additional" ? selected.sourceDisplay : display;
+      const range = sourceRange(sourceDisplay, span.start, span.end, selected.kind === "display" ? source : null);
+      if (!range || range.toString().trim() !== span.text) return null;
+      return { ...span, range };
+    }
+
+    function sourceRange(sourceDisplay, start, end, paintedSource) {
+      try {
+        const characters = paintedSource && Array.from(sourceDisplay.childNodes || []).filter(node =>
+          node.classList?.contains("character") || String(node.className || "").split(/\s+/u).includes("character"));
+        let nodes;
+        if (characters?.length) {
+          const referenceCharacters = Array.from(paintedSource);
+          if (characters.length !== referenceCharacters.length) return null;
+          let offset = 0;
+          nodes = characters.map((node, index) => { const from = offset; offset += referenceCharacters[index].length;
+            return { node, start: from, end: offset }; });
+        } else {
+          nodes = [];
+          let offset = 0;
+          const visit = node => {
+            if (node.nodeType === 3) { const from = offset; offset += String(node.textContent || "").length; nodes.push({ node, start: from, end: offset }); }
+            else for (const child of node.childNodes || []) visit(child);
+          };
+          visit(sourceDisplay);
+        }
+        const first = nodes.find(part => part.end > start);
+        const last = nodes.find(part => part.end >= end && part.start < end);
+        if (!first || !last) return null;
+        const endpoint = (part, position) => {
+          if (part.node.nodeType === 3) return { node: part.node, offset: position - part.start };
+          if (position === part.start) return { node: part.node, offset: 0 };
+          if (position === part.end) return { node: part.node, offset: part.node.childNodes.length };
+          return null;
+        };
+        const from = endpoint(first, start), to = endpoint(last, end);
+        if (!from || !to) return null;
+        const range = document.createRange();
+        range.setStart(from.node, from.offset); range.setEnd(to.node, to.offset);
+        return range;
+      } catch { return null; }
     }
 
     function showAction(selected) {
@@ -324,6 +385,13 @@
         return;
       }
       actionSelection = { ...selected, actionAnchor: actionSelection?.key === selected.key ? actionSelection.actionAnchor : null };
+      const target = sentenceTarget(selected);
+      if (sentenceButton) {
+        sentenceButton.hidden = !target;
+        sentenceButton.title = "学习当前选区所在的完整句子";
+      }
+      learnButton.textContent = target ? `翻译与学习 · ${/^[A-Za-z]+(?:['’\-][A-Za-z]+)*$/u.test(selected.text) ? "单词" : "选区"}` : "翻译与学习";
+      learnAction.setAttribute?.("data-split", String(Boolean(target)));
       learnAction.setAttribute?.("data-layout", touchInteraction ? "touch" : "floating");
       learnAction.hidden = false;
       positionAction();
@@ -678,11 +746,12 @@
         inspect();
       }
       if (!actionPressed || (actionPointerId !== null && event.pointerId !== undefined && event.pointerId !== actionPointerId)) return;
-      const bounds = learnButton?.getBoundingClientRect?.();
+      const button = pressedButton || learnButton;
+      const bounds = button?.getBoundingClientRect?.();
       const hasPoint = bounds?.width > 0 && bounds?.height > 0 && Number.isFinite(event.clientX) && Number.isFinite(event.clientY);
       const insideBounds = !hasPoint || (event.clientX >= bounds.left && event.clientX <= bounds.right
         && event.clientY >= bounds.top && event.clientY <= bounds.bottom);
-      if (!contains(learnButton, event.target) || !insideBounds) close();
+      if (!contains(button, event.target) || !insideBounds) close();
     });
     listen(document, "pointercancel", (event) => {
       selectingWithMouse = false;
@@ -690,6 +759,7 @@
       actionPressed = false;
       pressedSelection = null;
       actionPointerId = null;
+      pressedButton = null;
       if (touchPointer(event)) inspect();
       else close(false);
     });
@@ -708,29 +778,56 @@
     listen(window.visualViewport, "scroll", reposition);
     listen(retryButton, "pointerdown", (event) => { if (!touchPointer(event)) event.preventDefault(); });
     listen(closeButton, "pointerdown", (event) => { if (!touchPointer(event)) event.preventDefault(); });
-    listen(learnButton, "pointerdown", (event) => {
+    const pressAction = button => event => {
       if (event.isPrimary === false || (event.button !== undefined && event.button !== 0)) return;
       const selected = selection() || actionSelection;
       if (!selected || !/[A-Za-z]/.test(selected.text) || !sourceAvailable(selected)) return;
       pressedSelection = selected;
       actionPressed = true;
       actionPointerId = event.pointerId ?? null;
+      pressedButton = button;
       // Mouse focus must not collapse the source range. Touch keeps its native
       // behavior and uses the saved snapshot when the platform collapses it.
       if (!touchPointer(event)) event.preventDefault();
-    });
-    listen(learnButton, "click", () => {
+    };
+    listen(learnButton, "pointerdown", pressAction(learnButton));
+    listen(sentenceButton, "pointerdown", pressAction(sentenceButton));
+    function actionSnapshot(button) {
       const selected = pressedSelection || actionSelection;
       const live = selection();
       const native = window.getSelection?.();
       const changed = native && !native.isCollapsed && native.rangeCount && live?.key !== selected?.key;
-      if (!selected || changed || !/[A-Za-z]/.test(selected.text) || !sourceAvailable(selected)) {
+      if (!selected || (pressedButton && pressedButton !== button) || changed || !/[A-Za-z]/.test(selected.text) || !sourceAvailable(selected)) {
         hideAction();
-        return;
+        return null;
       }
+      return selected;
+    }
+    listen(learnButton, "click", () => {
+      const selected = actionSnapshot(learnButton);
+      if (!selected) return;
       dismissedKey = null;
       popupEngaged = true;
       return translate(selected);
+    });
+    listen(sentenceButton, "click", () => {
+      const selected = actionSnapshot(sentenceButton);
+      if (!selected) return;
+      const target = sentenceTarget(selected);
+      if (!target) { hideAction(); return; }
+      if (target.input) {
+        input.focus?.({ preventScroll: true });
+        input.setSelectionRange(target.start, target.end);
+      } else {
+        const native = window.getSelection?.();
+        if (!native?.removeAllRanges || !native.addRange) { hideAction(); return; }
+        native.removeAllRanges(); native.addRange(target.range);
+      }
+      const expanded = selection();
+      if (!expanded || expanded.text !== target.text || !sourceAvailable(expanded)) { hideAction(); return; }
+      dismissedKey = null;
+      popupEngaged = true;
+      return translate(expanded);
     });
     listen(expandButton, "click", () => setExpanded(detailsContainer?.hidden));
     listen(retryButton, "click", () => {

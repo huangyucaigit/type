@@ -6,6 +6,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const vm = require('node:vm');
 const { TextDecoder, TextEncoder } = require('node:util');
+const { groupSentences } = require('../sentence-core.js');
 
 const ARTICLE_STORAGE_KEY = 'mars-ielts-typing:article:v1';
 function memoryStorage(initial = {}) {
@@ -25,9 +26,19 @@ function createPage({ fetch, titleFetch, protocol = 'http:', storage = memorySto
   const elements = new Map();
   const intervals = [];
   const frames = new Map();
+  const timers = new Map();
+  const windowListeners = new Map();
+  const documentListeners = new Map();
   let now = 0;
   let nextFrame = 0;
+  let nextTimer = 0;
   let document;
+  const listen = (listeners, name, listener) => {
+    if (!listeners.has(name)) listeners.set(name, []);
+    listeners.get(name).push(listener);
+  };
+  const emit = (listeners, target, name, properties = {}) => Promise.all(
+    (listeners.get(name) || []).map(listener => listener({ target, preventDefault() {}, ...properties })));
 
   class Element {
     constructor(id = '') {
@@ -47,6 +58,7 @@ function createPage({ fetch, titleFetch, protocol = 'http:', storage = memorySto
       this.selectionStart = 0;
       this.selectionEnd = 0;
       this.selectionDirection = 'none';
+      this.scrollTop = 0;
       this.lastChild = { textContent: '' };
       this.classList = {
         toggle: (name, force) => {
@@ -80,9 +92,10 @@ function createPage({ fetch, titleFetch, protocol = 'http:', storage = memorySto
       siblings.splice(siblings.indexOf(this), 1);
       this.parentElement = null;
     }
-    replaceChildren() {
+    replaceChildren(...children) {
       this.children.forEach(child => { child.parentElement = null; });
       this.children = [];
+      this.append(...children);
     }
     get nextSibling() {
       if (!this.parentElement) return null;
@@ -92,7 +105,7 @@ function createPage({ fetch, titleFetch, protocol = 'http:', storage = memorySto
     setAttribute(name, value) { this.attributes.set(name, String(value)); }
     removeAttribute(name) { this.attributes.delete(name); }
     getAttribute(name) { return this.attributes.get(name) ?? null; }
-    setSelectionRange(start, end) { this.selectionStart = start; this.selectionEnd = end; }
+    setSelectionRange(start, end, direction = 'none') { this.selectionStart = start; this.selectionEnd = end; this.selectionDirection = direction; }
     focus() { document.activeElement = this; }
     showModal() { this.open = true; }
     close() { this.open = false; this.emit('close'); }
@@ -101,12 +114,13 @@ function createPage({ fetch, titleFetch, protocol = 'http:', storage = memorySto
 
   document = {
     activeElement: null,
+    visibilityState: 'visible',
     getElementById(id) {
       if (!elements.has(id)) elements.set(id, new Element(id));
       return elements.get(id);
     },
     createElement: () => new Element(),
-    addEventListener() {},
+    addEventListener: (name, listener) => listen(documentListeners, name, listener),
   };
   const context = vm.createContext({
     document,
@@ -119,22 +133,51 @@ function createPage({ fetch, titleFetch, protocol = 'http:', storage = memorySto
     requestAnimationFrame(callback) { frames.set(++nextFrame, callback); return nextFrame; },
     cancelAnimationFrame(id) { frames.delete(id); },
     setInterval(callback) { intervals.push(callback); },
+    setTimeout(callback, delay = 0) { timers.set(++nextTimer, { due: now + delay, callback }); return nextTimer; },
+    clearTimeout(id) { timers.delete(id); },
   });
   context.window = context;
   if (auth) context.ZijianAuth = auth;
   context.location = { protocol };
   Object.defineProperty(context, 'localStorage', { get: storageGetter || (() => storage) });
   context.innerHeight = 900;
-  context.addEventListener = () => {};
+  context.scrollY = 0;
+  context.addEventListener = (name, listener) => listen(windowListeners, name, listener);
+  context.scrollTo = ({ top }) => { context.scrollY = top; };
   context.scrollBy = () => {};
-  const sentence = { created: [], sources: [], titles: [], active: [], resets: [], refreshes: 0 };
+  const copy = value => JSON.parse(JSON.stringify(value));
+  const sentence = { created: [], sources: [], titles: [], active: [], resets: [], restored: [], refreshes: 0 };
   context.SentencePractice = { create(options) {
     sentence.created.push({ source: options.source, title: options.title, kind: options.kind });
+    let source = options.source;
+    const blank = () => ({ groupSize: sentence.progress?.groupSize || 1, activeGroup: 0,
+      groups: groupSentences(source, sentence.progress?.groupSize || 1).map(() => ({
+        draft: '', selectionStart: 0, selectionEnd: 0, selectionDirection: 'none', scrollTop: 0,
+        referenceVisible: true, checked: false,
+      })) });
+    sentence.progress = blank();
+    sentence.change = snapshot => {
+      sentence.progress = copy(snapshot);
+      options.onProgressChange?.(copy(sentence.progress));
+    };
     return {
-      setSource(source, title, kind) { sentence.sources.push({ source, title, kind }); },
+      setSource(nextSource, title, kind) {
+        source = nextSource;
+        sentence.sources.push({ source, title, kind });
+        sentence.progress = blank();
+        options.onProgressChange?.(copy(sentence.progress));
+      },
       setTitle(title) { sentence.titles.push(title); },
       setActive(active) { sentence.active.push(active); },
-      reset(focus) { sentence.resets.push(focus); },
+      reset(focus) { sentence.resets.push(focus); sentence.progress = blank(); options.onProgressChange?.(copy(sentence.progress)); },
+      getProgress() { return copy(sentence.progress); },
+      restoreProgress(snapshot) {
+        if (groupSentences(source, snapshot.groupSize).length !== snapshot.groups.length) return false;
+        sentence.progress = copy(snapshot);
+        sentence.restored.push(copy(snapshot));
+        return true;
+      },
+      getResumeTarget() { return document.getElementById(`sentence-group-${sentence.progress.activeGroup}`); },
       refreshTimer() { sentence.refreshes += 1; },
       getLearningSources() { return []; },
     };
@@ -148,6 +191,10 @@ function createPage({ fetch, titleFetch, protocol = 'http:', storage = memorySto
     $,
     storage,
     sentence,
+    document,
+    window: context,
+    windowEvent: (name, properties) => emit(windowListeners, context, name, properties),
+    documentEvent: (name, properties) => emit(documentListeners, document, name, properties),
     fire: (id, name, properties) => $(id).emit(name, properties),
     open: () => $('importButton').emit('click'),
     draft(text) { $('sourceEditor').value = text; return $('sourceEditor').emit('input'); },
@@ -163,6 +210,11 @@ function createPage({ fetch, titleFetch, protocol = 'http:', storage = memorySto
     },
     tick(milliseconds) {
       now += milliseconds;
+      for (const [id, timer] of [...timers].sort((a, b) => a[1].due - b[1].due)) {
+        if (!timers.has(id) || timer.due > now) continue;
+        timers.delete(id);
+        timer.callback();
+      }
       intervals.forEach(callback => callback());
       const pendingFrames = [...frames.values()];
       frames.clear();
@@ -570,7 +622,7 @@ test('clear preserves completed text and its lock while the stopwatch can be sta
   assert.equal(page.$('timerValue').textContent, '00:02');
 });
 
-test('a successfully pasted article survives a new page while typing and timing start empty', async () => {
+test('a successfully pasted article resumes its draft on a new page while manual timing starts empty', async () => {
   const storage = memoryStorage();
   const page = createPage({ storage });
   assert.equal(storage.writes.length, 0, 'opening the sample must not save it as an import');
@@ -585,7 +637,7 @@ test('a successfully pasted article survives a new page while typing and timing 
   assert.equal(saved.title, title);
   assert.equal(saved.articles.length, 1);
   assert.equal(page.$('articleStorageNotice').hidden, true);
-  assert.deepEqual(page.sentence.sources, [{ source: text, title, kind: '我的范文' }]);
+  assert.deepEqual(page.sentence.sources.at(-1), { source: text, title, kind: '我的范文' });
   await page.type('First');
   await page.fire('timerStart', 'click');
   page.tick(4200);
@@ -594,13 +646,13 @@ test('a successfully pasted article survives a new page while typing and timing 
   assert.equal(restored.$('articleTitle').textContent, title);
   assert.equal(restored.$('articleKind').textContent, '我的范文');
   assert.deepEqual(restored.sentence.created, [{ source: text, title, kind: '我的范文' }]);
-  assert.equal(restored.$('typingInput').value, '');
+  assert.equal(restored.$('typingInput').value, 'First');
   assert.equal(restored.$('typingInput').readOnly, false);
-  assert.equal(restored.$('statusLabel').textContent, '准备开始');
+  assert.equal(restored.$('statusLabel').textContent, '练习中');
   assert.equal(restored.$('timerValue').textContent, '00:00');
   assert.equal(restored.$('timerState').textContent, '未开始');
-  assert.equal(restored.$('progressFill').style.width, '0%');
-  assert.equal(storage.writes.length, 1);
+  assert.notEqual(restored.$('progressFill').style.width, '0%');
+  assert.equal(storage.writes.length, 2);
 });
 
 test('a TXT import saves the applied preview and filename title only after confirmation', async () => {
@@ -632,28 +684,32 @@ test('TXT filenames produce a trimmed nonempty title that remains restorable', a
   }
 });
 
-test('another confirmed article replaces the saved article without saving practice actions', async () => {
+test('another confirmed article becomes current while practice changes save independently of manual timing', async () => {
   const storage = memoryStorage();
   const page = createPage({ storage });
   await page.open();
   await page.choose(file('First.txt', 'The first essay.'));
   await page.fire('importForm', 'submit');
-  const saved = storage.getItem(ARTICLE_STORAGE_KEY);
+  const savedArticle = JSON.parse(storage.getItem(ARTICLE_STORAGE_KEY)).articles[0];
   await page.type('The');
   await page.fire('timerStart', 'click');
   page.tick(2300);
   await page.fire('timerStart', 'click');
+  const afterTyping = storage.getItem(ARTICLE_STORAGE_KEY);
   await page.fire('timerClear', 'click');
+  assert.equal(storage.getItem(ARTICLE_STORAGE_KEY), afterTyping, 'clearing manual time does not erase the saved draft');
   await page.fire('restartButton', 'click');
   await page.fire('sentenceModeButton', 'click');
   await page.fire('restartButton', 'click');
   await page.fire('realtimeModeButton', 'click');
-  assert.equal(storage.getItem(ARTICLE_STORAGE_KEY), saved);
-  assert.equal(storage.writes.length, 1);
+  page.tick(350);
+  const practiced = JSON.parse(storage.getItem(ARTICLE_STORAGE_KEY)).articles[0];
+  assert.deepEqual({ ...practiced, progress: undefined }, { ...savedArticle, progress: undefined });
+  assert.equal(practiced.progress.realtime.value, '');
   await page.open();
   await page.draft('The second essay.');
   await page.fire('importForm', 'submit');
-  assert.equal(storage.writes.length, 2);
+  assert.equal(JSON.parse(storage.getItem(ARTICLE_STORAGE_KEY)).articles.length, 2);
   const restored = createPage({ storage });
   assert.equal(restored.$('sourceReadable').textContent, 'The second essay.');
   assert.equal(restored.$('articleTitle').textContent, 'The second essay.');
@@ -759,7 +815,7 @@ test('unavailable storage and a throwing storage getter cannot prevent opening o
     assert.match(page.$('articleStorageNotice').textContent, /无法|未能|不能|失败|不会|未保存|未.*保存/);
     await page.type('Practice');
     assert.equal(page.$('statusLabel').textContent, '练习中');
-    assert.deepEqual(page.sentence.sources, [{ source: 'Practice still works.', title: 'Practice still works.', kind: '我的范文' }]);
+    assert.deepEqual(page.sentence.sources.at(-1), { source: 'Practice still works.', title: 'Practice still works.', kind: '我的范文' });
   }
 });
 
@@ -872,7 +928,7 @@ test('background AI naming never blocks practice or resets typed text and is reu
   assert.equal(page.$('articleTitle').textContent, '每天练习的价值');
   assert.equal(page.$('typingInput').value, 'Daily');
   assert.equal(page.$('timerValue').textContent, '00:03');
-  assert.equal(page.sentence.sources.length, 1, 'renaming must not reset sentence practice');
+  assert.equal(page.sentence.sources.length, 2, 'renaming must not reset sentence practice');
   assert.equal(page.sentence.titles.at(-1), '每天练习的价值');
   await importArticle(page, '  Daily practice improves language skills.  ');
   assert.equal(calls, 1);
@@ -924,4 +980,274 @@ test('failed AI names offer a retry, and file mode keeps history usable without 
   await local.fire('historyButton', 'click');
   assert.match(local.$('historyList').children[0].children[5].textContent, /本地文件/);
   assert.equal(local.$('historyCount').textContent, '1 / 10 篇');
+});
+
+const savedState = page => JSON.parse(page.storage.getItem(ARTICLE_STORAGE_KEY));
+const savedProgress = page => {
+  const state = savedState(page);
+  return state.currentId ? state.articles.find(article => article.id === state.currentId).progress : state.sampleProgress;
+};
+const frameRestore = page => { page.tick(0); page.tick(0); };
+async function loadRecent(page, prefix) {
+  await page.fire('historyButton', 'click');
+  const card = page.$('historyList').children.find(card => card.children[0].textContent.startsWith(prefix));
+  assert.ok(card, `recent article ${prefix} exists`);
+  await card.children[0].emit('click');
+  frameRestore(page);
+}
+
+test('automatic saves debounce typing and restore full text, cursor direction, scrolling and errors without startup writes', async () => {
+  const page = createPage();
+  await importArticle(page, 'We practise every day. Another sentence.');
+  const baseline = page.storage.writes.length;
+  await page.type('We');
+  page.tick(200);
+  await page.type('We practixe');
+  page.tick(349);
+  assert.equal(page.storage.writes.length, baseline);
+  page.$('typingInput').setSelectionRange(3, 8, 'backward');
+  await page.fire('typingInput', 'select');
+  page.window.scrollY = 630;
+  await page.windowEvent('scroll');
+  page.tick(350);
+  assert.equal(page.storage.writes.length, baseline + 1);
+  const progress = savedProgress(page);
+  assert.equal(progress.realtime.value, 'We practixe');
+  assert.equal(progress.realtime.selectionStart, 3);
+  assert.equal(progress.realtime.selectionEnd, 8);
+  assert.equal(progress.realtime.selectionDirection, 'backward');
+  assert.equal(progress.realtime.scrollY, 630);
+  const error = page.$('errorHint').textContent;
+  const writes = page.storage.writes.length;
+  const restored = createPage({ storage: page.storage });
+  frameRestore(restored);
+  assert.equal(restored.$('typingInput').value, 'We practixe');
+  assert.equal(restored.$('typingInput').selectionStart, 3);
+  assert.equal(restored.$('typingInput').selectionEnd, 8);
+  assert.equal(restored.$('typingInput').selectionDirection, 'backward');
+  assert.equal(restored.window.scrollY, 630);
+  assert.equal(restored.$('errorHint').textContent, error);
+  assert.equal(restored.$('practiceProgressNotice').textContent, '已恢复上次练习');
+  assert.equal(restored.document.activeElement, null, 'restoring does not open a mobile keyboard');
+  assert.equal(page.storage.writes.length, writes, 'restoring never overwrites the saved scene');
+});
+
+test('pagehide and hidden visibility flush recent input immediately and composition waits for committed text', async () => {
+  const page = createPage();
+  await importArticle(page, 'A complete sentence.');
+  await page.type('A');
+  await page.windowEvent('pagehide');
+  assert.equal(savedProgress(page).realtime.value, 'A');
+  const before = page.storage.writes.length;
+  await page.fire('typingInput', 'compositionstart');
+  await page.type('A 临');
+  page.tick(1000);
+  await page.windowEvent('pagehide');
+  assert.equal(page.storage.writes.length, before, 'unfinished IME text never replaces a committed draft');
+  page.$('typingInput').value = 'A complete';
+  page.$('typingInput').setSelectionRange(10, 10);
+  await page.fire('typingInput', 'compositionend');
+  page.document.visibilityState = 'hidden';
+  await page.documentEvent('visibilitychange');
+  assert.equal(savedProgress(page).realtime.value, 'A complete');
+  page.tick(1000);
+  assert.equal(page.storage.writes.length, before + 1, 'an immediate flush cancels the queued debounce');
+});
+
+test('sample practice resumes locally without appearing in imported history', async () => {
+  const page = createPage();
+  assert.equal(page.storage.getItem(ARTICLE_STORAGE_KEY), null);
+  await page.type('Learning a language');
+  await page.windowEvent('pagehide');
+  const state = savedState(page);
+  assert.deepEqual(state.articles, []);
+  assert.equal(state.currentId, null);
+  assert.equal(state.sampleProgress.realtime.value, 'Learning a language');
+  const restored = createPage({ storage: page.storage });
+  assert.equal(restored.$('articleKind').textContent, '示例范文');
+  assert.equal(restored.$('typingInput').value, 'Learning a language');
+  await restored.fire('historyButton', 'click');
+  assert.equal(restored.$('historyCount').textContent, '0 / 10 篇');
+});
+
+test('mode changes preserve separate drafts, group settings, active group, selection and per-mode scrolling', async () => {
+  const page = createPage();
+  await importArticle(page, 'First sentence. Second sentence. Third sentence. Fourth sentence.');
+  frameRestore(page);
+  await page.type('First sent');
+  page.$('typingInput').setSelectionRange(4, 4);
+  page.window.scrollY = 250;
+  await page.windowEvent('scroll');
+  await page.fire('sentenceModeButton', 'click');
+  frameRestore(page);
+  const sentence = { groupSize: 2, activeGroup: 1, groups: [
+    { draft: 'First group draft.', selectionStart: 3, selectionEnd: 5, selectionDirection: 'forward', referenceVisible: false, checked: true, scrollTop: 20 },
+    { draft: 'Third sent', selectionStart: 6, selectionEnd: 6, selectionDirection: 'none', referenceVisible: true, checked: false, scrollTop: 8 },
+  ] };
+  page.sentence.change(sentence);
+  page.window.scrollY = 910;
+  await page.windowEvent('scroll');
+  await page.windowEvent('pagehide');
+  const state = savedProgress(page);
+  assert.equal(state.mode, 'sentence');
+  assert.equal(state.realtime.value, 'First sent');
+  assert.equal(state.realtime.scrollY, 250);
+  assert.equal(state.sentence.scrollY, 910);
+  const restored = createPage({ storage: page.storage });
+  frameRestore(restored);
+  assert.equal(restored.$('sentencePanel').hidden, false);
+  assert.equal(restored.$('realtimePanel').hidden, true);
+  assert.equal(restored.window.scrollY, 910);
+  assert.equal(restored.sentence.progress.groupSize, 2);
+  assert.equal(restored.sentence.progress.activeGroup, 1);
+  assert.deepEqual(restored.sentence.progress.groups, sentence.groups);
+  await restored.fire('sentenceFullModeButton', 'click');
+  frameRestore(restored);
+  assert.equal(restored.$('typingInput').value, 'First sent');
+  assert.equal(restored.$('typingInput').selectionStart, 4);
+  assert.equal(restored.window.scrollY, 250);
+  await restored.windowEvent('pagehide');
+  assert.equal(savedProgress(restored).mode, 'realtime', 'switching a restored scene persists the newly selected mode');
+  await restored.fire('sentenceModeButton', 'click');
+  frameRestore(restored);
+  assert.equal(restored.window.scrollY, 910);
+  assert.deepEqual(restored.sentence.progress.groups, sentence.groups);
+  await restored.windowEvent('pagehide');
+  assert.equal(savedProgress(restored).mode, 'sentence');
+});
+
+test('switching articles flushes pending edits and restores each article while duplicate imports retain progress', async () => {
+  const page = createPage();
+  await importArticle(page, 'First article.');
+  await page.type('First');
+  await importArticle(page, 'Second article.');
+  await page.type('Second ar');
+  await loadRecent(page, 'First article.');
+  assert.equal(page.$('typingInput').value, 'First');
+  await page.type('First arti');
+  await loadRecent(page, 'Second article.');
+  assert.equal(page.$('typingInput').value, 'Second ar');
+  await importArticle(page, '\n First article.  ');
+  assert.equal(page.$('typingInput').value, 'First arti');
+  assert.equal(savedState(page).articles.length, 2);
+  const restored = createPage({ storage: page.storage });
+  assert.equal(restored.$('typingInput').value, 'First arti');
+});
+
+test('restarting clears only the active mode while keeping the other draft and grouping choice', async () => {
+  const page = createPage();
+  await importArticle(page, 'One sentence. Two sentence. Three sentence. Four sentence.');
+  await page.type('One sent');
+  await page.fire('sentenceModeButton', 'click');
+  frameRestore(page);
+  page.sentence.change({ groupSize: 2, activeGroup: 1, groups: [
+    { draft: 'One group.', selectionStart: 10, selectionEnd: 10, selectionDirection: 'none', referenceVisible: true, checked: true, scrollTop: 0 },
+    { draft: 'Three', selectionStart: 5, selectionEnd: 5, selectionDirection: 'none', referenceVisible: true, checked: false, scrollTop: 0 },
+  ] });
+  await page.windowEvent('pagehide');
+  await page.fire('restartButton', 'click');
+  page.tick(350);
+  let progress = savedProgress(page);
+  assert.equal(progress.realtime.value, 'One sent');
+  assert.equal(progress.sentence.groupSize, 2);
+  assert.deepEqual(progress.sentence.groups.map(group => group.draft), ['', '']);
+  page.sentence.change({ ...page.sentence.progress, groups: page.sentence.progress.groups.map((group, index) => ({ ...group, draft: index ? '' : 'New group' })) });
+  await page.fire('sentenceFullModeButton', 'click');
+  frameRestore(page);
+  assert.equal(page.$('typingInput').value, 'One sent');
+  await page.fire('restartButton', 'click');
+  page.tick(350);
+  progress = savedProgress(page);
+  assert.equal(progress.realtime.value, '');
+  assert.equal(progress.sentence.groups[0].draft, 'New group');
+});
+
+test('deleting a visible article discards its progress and pending edits cannot recreate it', async () => {
+  const page = createPage();
+  await importArticle(page, 'An article to remove.');
+  await page.type('An article');
+  await page.fire('historyButton', 'click');
+  const card = page.$('historyList').children[0];
+  await card.children[3].children[1].emit('click');
+  page.tick(1000);
+  await page.windowEvent('pagehide');
+  assert.deepEqual(savedState(page).articles, []);
+  assert.equal(page.$('typingInput').value, 'An article', 'deletion need not discard visible unsaved text');
+  await page.type('Still visible');
+  page.tick(1000);
+  assert.deepEqual(savedState(page).articles, []);
+  assert.equal('sampleProgress' in savedState(page), false, 'deleted imported drafts never become sample progress');
+});
+
+test('quota failure warns without losing the current draft or previously saved progress and a later save recovers', async () => {
+  const page = createPage();
+  await importArticle(page, 'An article that remains usable.');
+  await page.type('An');
+  await page.windowEvent('pagehide');
+  const before = page.storage.getItem(ARTICLE_STORAGE_KEY);
+  const write = page.storage.setItem;
+  page.storage.setItem = () => { throw new Error('quota'); };
+  await page.type('An article');
+  page.tick(350);
+  assert.equal(page.$('typingInput').value, 'An article');
+  assert.equal(page.storage.getItem(ARTICLE_STORAGE_KEY), before);
+  assert.equal(page.$('practiceProgressNotice').hidden, false);
+  assert.match(page.$('practiceProgressNotice').textContent, /暂未保存/);
+  assert.equal(page.$('practiceProgressNotice').classList.contains('is-warning'), true);
+  page.storage.setItem = write;
+  await page.windowEvent('pagehide');
+  assert.equal(savedProgress(page).realtime.value, 'An article');
+  assert.equal(page.$('practiceProgressNotice').hidden, true);
+});
+
+test('failed pending-progress saves prevent article replacement so switching or importing cannot lose the current draft', async () => {
+  for (const action of ['import', 'history']) {
+    const page = createPage();
+    await importArticle(page, 'First saved article.');
+    await importArticle(page, 'Second current article.');
+    await page.windowEvent('pagehide');
+    const before = page.storage.getItem(ARTICLE_STORAGE_KEY);
+    await page.type('Second unsaved typing');
+    const write = page.storage.setItem;
+    page.storage.setItem = () => { throw new Error('quota'); };
+    if (action === 'import') {
+      await page.open();
+      await page.draft('A replacement article.');
+      await page.fire('importForm', 'submit');
+      assert.equal(page.$('importDialog').open, true);
+      assert.equal(page.$('sourceEditor').value, 'A replacement article.');
+    } else {
+      await page.fire('historyButton', 'click');
+      const first = page.$('historyList').children.find(card => card.children[0].textContent === 'First saved article.');
+      await first.children[0].emit('click');
+      assert.equal(page.$('historyDialog').open, true);
+    }
+    assert.equal(page.$('sourceReadable').textContent, 'Second current article.');
+    assert.equal(page.$('typingInput').value, 'Second unsaved typing');
+    assert.equal(page.storage.getItem(ARTICLE_STORAGE_KEY), before);
+    assert.match(page.$('practiceProgressNotice').textContent, /暂未保存/);
+    page.storage.setItem = write;
+    await page.windowEvent('pagehide');
+    assert.equal(savedProgress(page).realtime.value, 'Second unsaved typing');
+  }
+});
+
+test('a failed history-selection write still restores the freshly flushed draft instead of a stale history card', async () => {
+  const page = createPage();
+  await importArticle(page, 'A saved article with a newer draft.');
+  await page.type('A saved');
+  await page.windowEvent('pagehide');
+  await page.fire('historyButton', 'click');
+  const current = page.$('historyList').children[0].children[0];
+  await page.type('A saved article with');
+  const write = page.storage.setItem;
+  let attempts = 0;
+  page.storage.setItem = (key, value) => {
+    if (++attempts === 2) throw new Error('selection write quota');
+    write(key, value);
+  };
+  await current.emit('click');
+  assert.equal(page.$('typingInput').value, 'A saved article with');
+  assert.equal(savedProgress(page).realtime.value, 'A saved article with');
+  assert.match(page.$('articleStorageNotice').textContent, /未能保存这次切换/);
 });

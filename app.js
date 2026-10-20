@@ -24,6 +24,112 @@
   const titleErrors = new Map();
   let editingArticleId = null;
   let currentArticleId = savedArticle?.id || null;
+  let progressPersistable = true;
+  let progressReady = false;
+  let restoringProgress = false;
+  let progressTimer = 0;
+  let progressDirty = false;
+  let viewportRevision = 0;
+  let restoringViewport = false;
+  let articleProgress = {};
+
+  function progressNotice(message = "", warning = false) {
+    const notice = $("practiceProgressNotice");
+    notice.hidden = !message;
+    notice.textContent = message;
+    notice.classList.toggle("is-warning", warning);
+  }
+
+  const pageScroll = () => Math.max(0, Number(window.scrollY) || 0);
+
+  function rememberMode() {
+    if (activeMode === "realtime") {
+      articleProgress.realtime = {
+        value: input.value,
+        selectionStart: input.selectionStart,
+        selectionEnd: input.selectionEnd,
+        selectionDirection: input.selectionDirection,
+        scrollY: restoringViewport ? articleProgress.realtime?.scrollY || 0 : pageScroll(),
+      };
+    } else {
+      const snapshot = sentencePractice?.getProgress();
+      if (snapshot) articleProgress.sentence = { ...snapshot,
+        scrollY: restoringViewport ? articleProgress.sentence?.scrollY || 0 : pageScroll() };
+    }
+  }
+
+  function flushProgress() {
+    clearTimeout(progressTimer);
+    progressTimer = 0;
+    if (!progressReady || restoringProgress || !progressDirty || !progressPersistable) return true;
+    if (composing || sentencePractice?.isComposing?.()) return false;
+    rememberMode();
+    try {
+      const saved = history.saveProgress(currentArticleId, {
+        ...articleProgress, version: 1, mode: activeMode,
+        scrollY: articleProgress[activeMode]?.scrollY || 0,
+      });
+      progressDirty = false;
+      // A deleted article may remain visible in this tab; never recreate its record.
+      if (!saved) progressPersistable = false;
+      if ($("practiceProgressNotice").classList.contains("is-warning")) progressNotice();
+      return true;
+    } catch {
+      progressNotice("练习进度暂未保存；本页输入仍保留。请检查浏览器存储空间或隐私设置。", true);
+      return false;
+    }
+  }
+
+  function scheduleProgress() {
+    if (!progressReady || restoringProgress || composing || sentencePractice?.isComposing?.() || !progressPersistable) return;
+    progressDirty = true;
+    clearTimeout(progressTimer);
+    progressTimer = setTimeout(flushProgress, 350);
+  }
+
+  function restoreViewport() {
+    const revision = ++viewportRevision;
+    const scrollY = articleProgress[activeMode]?.scrollY || 0;
+    restoringViewport = true;
+    requestAnimationFrame(() => {
+      if (revision !== viewportRevision) return;
+      window.scrollTo({ top: scrollY, left: 0, behavior: "instant" });
+      requestAnimationFrame(() => { if (revision === viewportRevision) restoringViewport = false; });
+    });
+  }
+
+  function restoreArticleProgress(snapshot) {
+    restoringProgress = true;
+    progressDirty = false;
+    clearTimeout(progressTimer);
+    articleProgress = snapshot ? { ...snapshot } : {};
+    const full = snapshot?.realtime;
+    try {
+      resetPractice(false);
+      sentencePractice?.setSource(source, articleTitle, articleKind);
+      if (full) {
+        input.value = normalizeInput(full.value);
+        input.setSelectionRange(full.selectionStart, full.selectionEnd, full.selectionDirection);
+        result = compare(source, input.value);
+        input.readOnly = !canPractice() || result.completed;
+        drawCharacters();
+        updateFeedback();
+        scheduleCaret();
+      }
+      if (snapshot?.sentence && !sentencePractice?.restoreProgress(snapshot.sentence)) delete articleProgress.sentence;
+      selectMode(snapshot?.mode || activeMode);
+      // Both modes have their own drafts, even when only one has been used.
+      articleProgress.realtime ||= { value: "", selectionStart: 0, selectionEnd: 0, selectionDirection: "none", scrollY: 0 };
+      articleProgress.sentence ||= { ...sentencePractice?.getProgress(), scrollY: 0 };
+    } finally {
+      restoringProgress = false;
+      progressReady = true;
+    }
+    const hasDraft = full?.value || snapshot?.sentence?.groups?.some(group => group.draft || group.checked);
+    progressNotice(hasDraft ? "已恢复上次练习" : "");
+    // Startup restores the reading position without opening a mobile keyboard.
+    if (snapshot) restoreViewport();
+  }
 
   function storageNotice(message = "") {
     const notice = $("articleStorageNotice");
@@ -57,6 +163,7 @@
   let activeMode = "realtime";
   let selectionTranslation = null;
   const sentencePractice = window.SentencePractice?.create({ source, title: articleTitle, kind: articleKind,
+    onProgressChange: scheduleProgress,
     onLearningReset: () => selectionTranslation?.reset() });
   const caret = document.createElement("span");
   caret.className = "caret-anchor";
@@ -77,6 +184,7 @@
     closeButton: $("selectionTranslationClose"),
     learnAction: $("selectionLearnAction"),
     learnButton: $("selectionLearnButton"),
+    sentenceButton: $("selectionSentenceButton"),
     getReferenceText: () => source,
     getAdditionalSources: () => activeMode === "sentence" ? sentencePractice?.getLearningSources() || [] : [],
     isPrimaryActive: () => activeMode === "realtime",
@@ -120,17 +228,24 @@
       const card = document.createElement("li");
       card.className = "history-card";
       const load = button(article.title, () => withAccess(() => {
+        if (!flushProgress()) { error.textContent = "当前练习进度暂未保存，请检查浏览器存储设置后重试；当前输入仍保留。"; return; }
         let selected = article;
         try { selected = history.select(article.id); storageNotice(); }
-        catch { storageNotice("浏览器未能保存这次切换；本次仍可练习，刷新后可能恢复旧文章。"); }
+        catch {
+          // The flush above may have saved newer input than the open history card.
+          selected = history.read().articles.find(item => item.id === article.id);
+          storageNotice("浏览器未能保存这次切换；本次仍可练习，刷新后可能恢复旧文章。");
+        }
         if (!selected) { renderHistory(); return; }
         currentArticleId = article.id;
+        progressPersistable = true;
         source = normalizeSource(selected.text);
         articleTitle = selected.title;
         articleKind = "我的范文";
         historyDialog.close();
-        resetPractice(activeMode === "realtime");
-        sentencePractice?.setSource(source, articleTitle, articleKind);
+        restoreArticleProgress(selected.progress);
+        if (!selected.progress) restoreViewport();
+        scheduleProgress();
       }), "history-load");
       load.setAttribute("aria-label", `载入范文：${article.title}`);
       const excerpt = document.createElement("p");
@@ -176,6 +291,7 @@
       const remove = button("删除", () => {
         try {
           history.remove(article.id);
+          if (article.id === currentArticleId) { progressPersistable = false; progressDirty = false; progressNotice(); }
           titleErrors.delete(article.id);
           storageNotice();
           renderHistory();
@@ -387,6 +503,7 @@
     updateFeedback();
     updateTimer();
     scheduleCaret();
+    scheduleProgress();
   }
 
   function resetPractice(focus = true) {
@@ -442,6 +559,8 @@
   }
 
   function selectMode(mode, moveFocus = false) {
+    const changed = activeMode !== mode;
+    if (changed && progressReady && !restoringProgress) rememberMode();
     selectionTranslation?.close();
     referenceSelection?.clear();
     activeMode = mode;
@@ -454,6 +573,7 @@
     ["realtimeModeButton", "sentenceFullModeButton"].forEach(id => $(id)?.setAttribute("aria-pressed", String(mode === "realtime")));
     ["sentenceModeButton", "sentenceSplitModeButton"].forEach(id => $(id)?.setAttribute("aria-pressed", String(mode === "sentence")));
     if (moveFocus) $(mode === "realtime" ? "realtimeModeButton" : "sentenceSplitModeButton")?.focus({ preventScroll: true });
+    if (changed && progressReady && !restoringProgress) { restoreViewport(); scheduleProgress(); }
   }
 
   ["realtimeModeButton", "sentenceFullModeButton"].forEach(id => $(id)?.addEventListener("click", () => selectMode("realtime", true)));
@@ -545,22 +665,29 @@
         editor.focus();
         return;
       }
+      if (!flushProgress()) { importError("当前练习进度暂未保存，请检查浏览器存储设置后重试；当前输入仍保留。"); return; }
       source = text;
       const summary = Array.from(source.replace(/\s+/gu, " "));
       articleTitle = fileTitle.trim() || summary.slice(0, 48).join("") + (summary.length > 48 ? "…" : "");
       articleKind = "我的范文";
       const article = saveArticle(editor.value, articleTitle);
       currentArticleId = article?.id || null;
+      progressPersistable = !!article;
       if (article) articleTitle = article.title;
       dialog.close();
-      resetPractice(activeMode === "realtime");
-      sentencePractice?.setSource(source, articleTitle, "我的范文");
+      restoreArticleProgress(article?.progress);
+      if (!article?.progress) restoreViewport();
+      if (activeMode === "realtime") input.focus({ preventScroll: true });
+      scheduleProgress();
       if (article?.shouldGenerateTitle) void generateTitle(article);
     });
   });
   $("restartButton").addEventListener("click", () => withAccess(() => {
     if (activeMode === "sentence") sentencePractice.reset(true);
     else resetPractice();
+    progressNotice();
+    scheduleProgress();
+    flushProgress();
   }));
   $("timerStart").addEventListener("click", async () => {
     if (togglingTimer) return;
@@ -574,14 +701,22 @@
   input.addEventListener("input", reconcile);
   input.addEventListener("compositionstart", () => { composing = true; selectionTranslation?.prepareForInput(); referenceSelection?.clear(); });
   input.addEventListener("compositionend", () => { composing = false; reconcile(); });
-  ["keyup", "click", "select", "focus", "pointerup"].forEach((name) => input.addEventListener(name, scheduleCaret));
+  ["keyup", "click", "select", "focus", "pointerup"].forEach((name) => input.addEventListener(name, () => {
+    scheduleCaret();
+    scheduleProgress();
+  }));
   document.addEventListener("selectionchange", () => {
-    if (document.activeElement === input) scheduleCaret();
+    if (document.activeElement === input) { scheduleCaret(); scheduleProgress(); }
   });
   document.addEventListener("focusin", keepSentenceInputVisible);
   document.addEventListener("input", keepSentenceInputVisible);
   window.addEventListener("resize", scheduleCaret);
-  document.addEventListener("visibilitychange", updateTimer);
+  window.addEventListener("scroll", () => { if (!restoringViewport) scheduleProgress(); }, { passive: true });
+  window.addEventListener("pagehide", flushProgress);
+  document.addEventListener("visibilitychange", () => {
+    updateTimer();
+    if (document.visibilityState === "hidden") flushProgress();
+  });
   window.addEventListener("authchange", () => {
     const allowed = canPractice();
     input.readOnly = !allowed || result.completed;
@@ -589,6 +724,6 @@
     sentencePractice?.refreshAccess?.();
   });
   setInterval(() => { updateTimer(); sentencePractice?.refreshTimer(); }, 200);
-  selectMode("realtime");
-  resetPractice(false);
+  if (window.history && "scrollRestoration" in window.history) window.history.scrollRestoration = "manual";
+  restoreArticleProgress(savedArticle?.progress || (!savedArticle ? initialHistory.sampleProgress : null));
 })();

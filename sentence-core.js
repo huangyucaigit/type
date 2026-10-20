@@ -31,21 +31,23 @@
     return false;
   }
 
-  function splitSentences(text) {
-    const source = String(text ?? '').replace(/^\uFEFF/, '').replace(/\r\n?/g, '\n').trim();
+  function sentenceRanges(text) {
+    const source = String(text ?? '');
     const sentences = [];
     let start = 0;
 
     function append(end) {
-      const sentence = source.slice(start, end).trim();
-      if (sentence) sentences.push(sentence);
+      const raw = source.slice(start, end);
+      const sentence = raw.trim();
+      if (sentence) sentences.push({ text: sentence, start: start + raw.length - raw.trimStart().length,
+        end: end - (raw.length - raw.trimEnd().length) });
       start = end;
     }
 
     for (let index = 0; index < source.length; index += 1) {
       const character = source[index];
       if (character === '\n') {
-        const paragraphBreak = source.slice(index).match(/^\n[\t ]*\n(?:[\t ]*\n)*/);
+        const paragraphBreak = source.slice(index).match(/^\n[\t \r]*\n(?:[\t \r]*\n)*/);
         if (paragraphBreak) {
           append(index);
           start = index + paragraphBreak[0].length;
@@ -79,6 +81,11 @@
     }
     append(source.length);
     return sentences;
+  }
+
+  function splitSentences(text) {
+    const source = String(text ?? '').replace(/^\uFEFF/, '').replace(/\r\n?/g, '\n').trim();
+    return sentenceRanges(source).map(sentence => sentence.text);
   }
 
   function groupSentences(text, count) {
@@ -237,5 +244,5 @@
     return { tokens, missing, correct, errorCount, completed: expectedWords.length > 0 && errorCount === 0 };
   }
 
-  return { splitSentences, groupSentences, compareWords };
+  return { splitSentences, sentenceRanges, groupSentences, compareWords };
 });

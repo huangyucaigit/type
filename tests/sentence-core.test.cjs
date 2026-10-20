@@ -5,7 +5,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const vm = require('node:vm');
-const { splitSentences, groupSentences, compareWords } = require('../sentence-core.js');
+const { splitSentences, sentenceRanges, groupSentences, compareWords } = require('../sentence-core.js');
 
 function words(result) {
   return result.tokens.filter(token => token.actualIndex >= 0);
@@ -14,7 +14,7 @@ function words(result) {
 test('provides the same browser and Node interfaces', () => {
   const context = vm.createContext({});
   vm.runInContext(fs.readFileSync(path.join(__dirname, '..', 'sentence-core.js'), 'utf8'), context);
-  assert.deepEqual(Object.keys(context.SentenceCore).sort(), ['compareWords', 'groupSentences', 'splitSentences']);
+  assert.deepEqual(Object.keys(context.SentenceCore).sort(), ['compareWords', 'groupSentences', 'sentenceRanges', 'splitSentences']);
   assert.equal(context.SentenceCore.compareWords('Hello.', 'Hello.').completed, true);
 });
 
@@ -65,6 +65,39 @@ test('does not split decimals, titles, examples or common country abbreviations'
   assert.deepEqual(splitSentences('J. Smith lives in the U.S. It is his home. He met the U.S. President.'), [
     'J. Smith lives in the U.S.', 'It is his home.', 'He met the U.S. President.',
   ]);
+});
+
+test('sentence ranges retain exact UTF-16 positions through BOM, emoji, CRLF and paragraph spacing', () => {
+  const source = '\uFEFF  First 😀 sentence.\r\nSecond sentence!\r\n \t\r\n  Final\r\nwrapped tail  ';
+  const expected = ['First 😀 sentence.', 'Second sentence!', 'Final\r\nwrapped tail'];
+  const ranges = sentenceRanges(source);
+  assert.deepEqual(ranges.map(range => range.text), expected);
+  assert.deepEqual(ranges.map(range => [range.start, range.end]), expected.map(text => {
+    const start = source.indexOf(text);
+    return [start, start + text.length];
+  }));
+  for (const range of ranges) assert.equal(source.slice(range.start, range.end), range.text);
+  assert.deepEqual(splitSentences(source), ['First 😀 sentence.', 'Second sentence!', 'Final\nwrapped tail'],
+    'the existing normalized splitSentences contract is preserved');
+});
+
+test('sentence ranges use the existing title, initial, decimal and closing-quote boundaries', () => {
+  const source = 'Dr. J. Smith paid 3.14 dollars. “Really?!” he asked. Next sentence.';
+  const texts = ['Dr. J. Smith paid 3.14 dollars.', '“Really?!” he asked.', 'Next sentence.'];
+  assert.deepEqual(sentenceRanges(source), texts.map(text => {
+    const start = source.indexOf(text);
+    return { start, end: start + text.length, text };
+  }));
+  assert.deepEqual(sentenceRanges(' \uFEFF\r\n\t'), []);
+  assert.deepEqual(sentenceRanges(null), []);
+});
+
+test('sentence ranges distinguish repeated identical sentences without searching from the beginning', () => {
+  const source = 'Keep going. Keep going.\n\nKeep going.';
+  const ranges = sentenceRanges(source);
+  assert.deepEqual(ranges.map(range => range.start), [0, 12, 25]);
+  assert.deepEqual(ranges.map(range => range.end), [11, 23, 36]);
+  assert.ok(ranges.every(range => range.text === 'Keep going.'));
 });
 
 test('groups by any positive safe integer and keeps the final smaller group', () => {

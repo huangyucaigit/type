@@ -1,7 +1,7 @@
 (function () {
   "use strict";
 
-  function create({ source, title, kind = "我的范文", onLearningReset = () => {} }) {
+  function create({ source, title, kind = "我的范文", onLearningReset = () => {}, onProgressChange = () => {} }) {
     const { groupSentences, splitSentences, compareWords } = window.SentenceCore;
     const { PracticeClock, formatDuration } = window.TypingCore;
     const $ = (id) => document.getElementById(id);
@@ -20,8 +20,67 @@
     let items = [];
     let lastTime = "";
     let active = true;
+    let activeGroup = 0;
+    let restoringProgress = false;
+    let progressReady = false;
+    let lastProgress = "";
     // Translations belong to the exact English text, independently of practice drafts.
     const translations = new Map();
+
+    const clampOffset = (value, length) => Number.isSafeInteger(value) ? Math.min(length, Math.max(0, value)) : length;
+    const selectionDirection = value => ["forward", "backward"].includes(value) ? value : "none";
+    const scrollOffset = value => Number.isFinite(value) ? Math.max(0, Math.min(100000000, Math.floor(value))) : 0;
+
+    function applyRestoredScroll(item) {
+      if (item.restoredScrollTop === undefined || !active || item.answer.hidden
+        || (item.answer.getClientRects && !item.answer.getClientRects().length)) return;
+      item.answer.scrollTop = item.restoredScrollTop;
+      item.restoredScrollTop = undefined;
+    }
+
+    function restoreVisibleScroll() {
+      items.forEach(applyRestoredScroll);
+      // setActive can run just before the containing panel becomes visible.
+      window.requestAnimationFrame(() => items.forEach(applyRestoredScroll));
+    }
+
+    function getProgress() {
+      return {
+        groupSize,
+        activeGroup,
+        groups: items.map(item => {
+          const draft = item.answer.value;
+          const start = clampOffset(item.answer.selectionStart, draft.length);
+          return {
+            draft,
+            selectionStart: start,
+            selectionEnd: Math.max(start, clampOffset(item.answer.selectionEnd, draft.length)),
+            selectionDirection: selectionDirection(item.answer.selectionDirection),
+            scrollTop: item.restoredScrollTop ?? scrollOffset(item.answer.scrollTop),
+            referenceVisible: !item.reference.hidden,
+            // AI expression review must not be replaced with a strict comparison:
+            // valid paraphrases could otherwise become errors after restoration.
+            checked: Boolean(item.analysis && !item.analysis.review),
+          };
+        }),
+      };
+    }
+
+    function progressChanged() {
+      if (!progressReady || restoringProgress || items.some(item => item.composing)) return;
+      const snapshot = getProgress();
+      const serialized = JSON.stringify(snapshot);
+      if (serialized === lastProgress) return;
+      lastProgress = serialized;
+      onProgressChange(snapshot);
+    }
+
+    function activateGroup(item) {
+      const index = items.indexOf(item);
+      if (index < 0) return;
+      activeGroup = index;
+      progressChanged();
+    }
 
     function element(tag, className, text) {
       const node = document.createElement(tag);
@@ -43,6 +102,7 @@
       item.placeholder.hidden = visible;
       item.toggle.textContent = visible ? "隐藏范文" : "显示范文";
       item.toggle.setAttribute("aria-expanded", String(visible));
+      if (items.includes(item)) progressChanged();
     }
 
     function translationError(status) {
@@ -170,6 +230,7 @@
       cancelReview(item);
       item.analysis = null;
       item.answer.hidden = false;
+      applyRestoredScroll(item);
       item.checkedAnswer.hidden = true;
       item.editButton.hidden = true;
       item.feedback.textContent = "";
@@ -183,6 +244,7 @@
       item.inputLabel.textContent = "你的输入";
       refreshSummary();
       if (focus) item.answer.focus({ preventScroll: true });
+      progressChanged();
     }
 
     function cancelReview(item) {
@@ -369,6 +431,7 @@
         item.card.classList.add("is-checked");
         item.card.classList.toggle("is-correct", completed);
         refreshSummary();
+        progressChanged();
         if (focusResult) item.checkedAnswer.focus({ preventScroll: true });
       } catch (error) {
         if (!isCurrent()) return;
@@ -387,8 +450,8 @@
       }
     }
 
-    function checkWords(item) {
-      if (!requireAccess()) return;
+    function checkWords(item, { restore = false } = {}) {
+      if (!restore && !requireAccess()) return;
       onLearningReset();
       cancelReview(item);
       item.reviewPanel.hidden = true;
@@ -432,7 +495,8 @@
       item.card.classList.add("is-checked");
       item.card.classList.toggle("is-correct", analysis.completed);
       refreshSummary();
-      item.checkedAnswer.focus({ preventScroll: true });
+      if (!restore) item.checkedAnswer.focus({ preventScroll: true });
+      progressChanged();
     }
 
     function buildGroup(group, index, fragments) {
@@ -502,13 +566,24 @@
         item.answer.addEventListener(event, () => onLearningReset());
       }
       item.answer.addEventListener("compositionstart", () => { item.composing = true; });
-      item.answer.addEventListener("compositionend", () => { item.composing = false; });
+      item.answer.addEventListener("compositionend", () => {
+        item.composing = false;
+        item.draft = item.answer.value;
+        activateGroup(item);
+      });
       item.answer.addEventListener("input", () => {
         onLearningReset();
         item.draft = item.answer.value;
         if (item.analysis || item.reviewPending || item.feedback.textContent) edit(item, false);
         item.state.textContent = item.draft.length ? "待检查" : "待输入";
         refreshSummary();
+        activateGroup(item);
+      });
+      for (const name of ["focus", "select", "keyup", "pointerup", "click"]) {
+        item.answer.addEventListener(name, () => activateGroup(item));
+      }
+      item.answer.addEventListener("scroll", () => {
+        if (active && !item.answer.hidden && item.restoredScrollTop === undefined) progressChanged();
       });
       item.checkedAnswer = element("div", "checked-answer");
       item.checkedAnswer.setAttribute("role", "region");
@@ -582,6 +657,11 @@
       item.reviewPanel.setAttribute("aria-label", `第 ${number} 组表达评析`);
       item.reviewPanel.hidden = true;
       card.append(actions, item.feedback, item.missing, item.reviewLink, item.reviewPanel);
+      // Reference selection, checked results and action controls also identify
+      // which group the learner last used, without moving keyboard focus.
+      for (const name of ["focusin", "pointerup", "click"]) {
+        card.addEventListener(name, () => activateGroup(item));
+      }
       showReference(item, true);
       return item;
     }
@@ -591,6 +671,7 @@
       items.forEach(cancelReview);
       clock.reset();
       lastTime = "";
+      activeGroup = 0;
       $("groupingError").hidden = true;
       $("sentencesPerGroup").removeAttribute("aria-invalid");
       $("sentencesPerGroup").value = String(groupSize);
@@ -615,6 +696,44 @@
       $("sentenceMeta").textContent = `${splitSentences(sourceText).length} 句 · ${items.length} 组 · 每组最多 ${groupSize} 句`;
       refreshSummary();
       if (focus) items[0]?.answer.focus({ preventScroll: true });
+      progressChanged();
+    }
+
+    function restoreProgress(snapshot) {
+      if (!snapshot || typeof snapshot !== "object" || !Number.isSafeInteger(snapshot.groupSize)
+        || snapshot.groupSize < 1 || !Array.isArray(snapshot.groups) || snapshot.groups.length > 10000) return false;
+      const expected = groupSentences(sourceText, snapshot.groupSize).length;
+      let remaining = 1000000;
+      if (snapshot.groups.length !== expected || snapshot.groups.some(group => {
+        if (!group || typeof group !== "object" || typeof group.draft !== "string") return true;
+        remaining -= group.draft.length;
+        return remaining < 0;
+      })) return false;
+      restoringProgress = true;
+      try {
+        groupSize = snapshot.groupSize;
+        reset();
+        snapshot.groups.forEach((group, index) => {
+          const item = items[index];
+          item.draft = group.draft;
+          item.answer.value = group.draft;
+          item.restoredScrollTop = scrollOffset(group.scrollTop);
+          const start = clampOffset(group.selectionStart, group.draft.length);
+          const end = Math.max(start, clampOffset(group.selectionEnd, group.draft.length));
+          item.answer.setSelectionRange(start, end, selectionDirection(group.selectionDirection));
+          item.state.textContent = item.draft.length ? "待检查" : "待输入";
+          if (group.checked === true) checkWords(item, { restore: true });
+          showReference(item, group.referenceVisible !== false);
+        });
+        activeGroup = Number.isSafeInteger(snapshot.activeGroup)
+          ? Math.max(0, Math.min(items.length - 1, snapshot.activeGroup)) : 0;
+        refreshSummary();
+        restoreVisibleScroll();
+        lastProgress = JSON.stringify(getProgress());
+        return true;
+      } finally {
+        restoringProgress = false;
+      }
     }
 
     $("applyGrouping").addEventListener("click", () => withAccess(() => {
@@ -645,8 +764,17 @@
     });
     $("sentenceTimerClear").addEventListener("click", () => { clock.reset(); refreshTimer(); });
     reset();
+    progressReady = true;
+    lastProgress = JSON.stringify(getProgress());
     return {
       reset,
+      getProgress,
+      restoreProgress,
+      isComposing() { return items.some(item => item.composing); },
+      getResumeTarget() {
+        const item = items[activeGroup];
+        return item ? item.answer.hidden ? item.checkedAnswer : item.answer : null;
+      },
       refreshTimer,
       refreshAccess() {
         const allowed = canPractice();
@@ -655,6 +783,7 @@
       },
       setActive(value) {
         active = Boolean(value);
+        if (active) restoreVisibleScroll();
         if (!active) items.filter(item => item.reviewPending).forEach(item => edit(item, false));
       },
       getLearningSources() {

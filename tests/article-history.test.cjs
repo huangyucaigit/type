@@ -119,3 +119,147 @@ test('invalid storage falls back safely and invalid titles do not mutate records
   for (const title of ['', ' \n ', '长'.repeat(81)]) assert.throws(() => f.store.rename(first.id, title));
   assert.equal(f.store.read().articles[0].title, 'One');
 });
+
+function progress(overrides = {}) {
+  return { version: 1, mode: 'realtime',
+    realtime: { value: 'Half typed', selectionStart: 5, selectionEnd: 5, selectionDirection: 'none', scrollY: 210 },
+    sentence: { groupSize: 2, activeGroup: 1, scrollY: 450, groups: [
+      { draft: 'First group.', selectionStart: 12, selectionEnd: 12, selectionDirection: 'none', referenceVisible: false, checked: true, scrollTop: 30 },
+      { draft: 'Second', selectionStart: 2, selectionEnd: 6, selectionDirection: 'backward', referenceVisible: true, scrollTop: 5 },
+    ] }, scrollY: 210, ...overrides };
+}
+
+test('practice progress survives reload independently per article and never changes import or last-used order', () => {
+  const f = fixture();
+  const first = f.store.importArticle('One.', 'One');
+  const second = f.store.importArticle('Two.', 'Two');
+  const before = f.store.read();
+  const firstProgress = progress();
+  const secondProgress = progress({ mode: 'sentence', scrollY: 450 });
+  f.store.saveProgress(first.id, firstProgress);
+  f.store.saveProgress(second.id, secondProgress);
+  const reloaded = f.makeStore().read();
+  assert.equal(reloaded.currentId, second.id);
+  assert.deepEqual(reloaded.articles.map(({ progress, ...article }) => article), before.articles);
+  assert.deepEqual(reloaded.articles[0].progress, firstProgress);
+  assert.deepEqual(reloaded.articles[1].progress, secondProgress);
+  f.store.select(first.id);
+  f.store.rename(first.id, 'Renamed');
+  assert.deepEqual(f.makeStore().read().articles[0].progress, firstProgress);
+});
+
+test('sample progress is optional and stores alongside imported articles without changing the selected article', () => {
+  const f = fixture();
+  assert.deepEqual(f.store.read(), { articles: [], currentId: null });
+  assert.equal(f.value(), null);
+  f.store.saveProgress(null, progress());
+  assert.deepEqual(f.makeStore().read(), { articles: [], currentId: null, sampleProgress: progress() });
+  const imported = f.store.importArticle('Imported text.', 'Imported');
+  assert.equal(f.makeStore().read().currentId, imported.id);
+  assert.deepEqual(f.makeStore().read().sampleProgress, progress());
+  f.store.saveProgress(null, null);
+  assert.equal('sampleProgress' in f.makeStore().read(), false);
+  assert.equal(f.makeStore().read().currentId, imported.id);
+});
+
+test('progress normalizes cursor and scroll bounds, strips unknown properties, and preserves a full ordinary draft', () => {
+  const f = fixture();
+  const article = f.store.importArticle('Tiny article.', 'Tiny');
+  const draft = 'Longer draft than the reference. '.repeat(2000);
+  const saved = progress({ mode: 'sentence', scrollY: -4.5,
+    realtime: { value: draft, selectionStart: -20, selectionEnd: Infinity, selectionDirection: 'bad', scrollY: 23.9, secret: 'drop' },
+    sentence: { groupSize: Number.MAX_SAFE_INTEGER, activeGroup: 100.5, scrollY: 1e20, groups: [
+      { draft: 'abc', selectionStart: 50, selectionEnd: -5, selectionDirection: 'backward', referenceVisible: false, checked: false, scrollTop: -50, extra: 'drop' },
+    ], unknown: true }, unexpected: 'drop' });
+  f.store.saveProgress(article.id, saved);
+  const result = f.makeStore().read().articles[0].progress;
+  assert.equal(result.realtime.value, draft);
+  assert.deepEqual(result.realtime, { value: draft, selectionStart: 0, selectionEnd: 0, selectionDirection: 'none', scrollY: 23 });
+  assert.deepEqual(result.sentence, { groupSize: Number.MAX_SAFE_INTEGER, activeGroup: 0, scrollY: 100000000, groups: [
+    { draft: 'abc', selectionStart: 3, selectionEnd: 3, selectionDirection: 'backward', referenceVisible: false, checked: false, scrollTop: 0 },
+  ] });
+  assert.equal(result.scrollY, 0);
+  assert.equal('unexpected' in result, false);
+});
+
+test('all returned and submitted progress snapshots are independent copies, including nested groups', () => {
+  const f = fixture();
+  const article = f.store.importArticle('One.', 'One');
+  const submitted = progress();
+  const written = f.store.saveProgress(article.id, submitted);
+  f.store.saveProgress(null, progress());
+  submitted.realtime.value = 'mutated input';
+  submitted.sentence.groups[0].draft = 'mutated input group';
+  written.articles[0].progress.sentence.groups[0].draft = 'mutated result';
+  const read = f.store.read();
+  read.articles[0].progress.realtime.value = 'mutated read';
+  read.sampleProgress.sentence.groups[0].draft = 'mutated sample';
+  f.store.select(article.id).progress.sentence.groups[0].draft = 'mutated selection';
+  f.store.rename(article.id, 'New title').progress.realtime.value = 'mutated rename';
+  const imported = f.store.importArticle('One.', 'One again');
+  imported.progress.sentence.groups[0].draft = 'mutated duplicate';
+  assert.deepEqual(f.makeStore().read().articles[0].progress, progress());
+  assert.deepEqual(f.makeStore().read().sampleProgress, progress());
+});
+
+test('duplicate imports preserve progress while article deletion and FIFO eviction discard it permanently', () => {
+  const f = fixture();
+  const first = f.store.importArticle('One.', 'One');
+  f.store.saveProgress(first.id, progress());
+  f.store.importArticle('  One. ', 'Duplicate');
+  assert.deepEqual(f.store.read().articles[0].progress, progress());
+  f.store.remove(first.id);
+  const afterDelete = f.value();
+  assert.equal(f.store.saveProgress(first.id, progress()), null);
+  assert.equal(f.value(), afterDelete);
+  const reimported = f.store.importArticle('One.', 'One');
+  assert.notEqual(reimported.id, first.id);
+  assert.equal('progress' in reimported, false);
+  f.store.saveProgress(reimported.id, progress());
+  for (let i = 2; i <= 11; i++) f.store.importArticle(`Article ${i}.`, `Title ${i}`);
+  const afterEviction = f.value();
+  assert.equal(f.store.saveProgress(reimported.id, progress()), null);
+  assert.equal(f.value(), afterEviction);
+  assert.equal(f.makeStore().read().articles.some(item => item.id === reimported.id), false);
+});
+
+test('malformed and oversized progress is ignored on read without writes and rejected on save without modifying drafts', () => {
+  const invalid = [null, [], {}, { ...progress(), version: 2 }, { ...progress(), mode: 'invalid' },
+    { version: 1, mode: 'realtime' }, { ...progress(), realtime: { value: 25 } },
+    { ...progress(), sentence: { groupSize: 0, groups: [] } },
+    { ...progress(), sentence: { groupSize: 1.1, groups: [] } },
+    { ...progress(), sentence: { groupSize: 1, groups: [null] } },
+    { ...progress(), sentence: { groupSize: 1, groups: Array.from({ length: 10001 }, () => ({ draft: '' })) } },
+    { ...progress(), realtime: { value: 'x'.repeat(1000001) } },
+  ];
+  for (const value of invalid) {
+    const original = JSON.stringify({ version: 1, articles: [{ id: 'one', text: 'One.', title: 'One', progress: value }], currentId: 'one', sampleProgress: value });
+    const f = fixture(original);
+    const read = f.store.read();
+    assert.equal(read.articles.length, 1);
+    assert.equal('progress' in read.articles[0], false);
+    assert.equal('sampleProgress' in read, false);
+    assert.equal(f.value(), original);
+    // null is the explicit clearing operation rather than an invalid save.
+    if (value !== null) assert.throws(() => f.store.saveProgress('one', value), /练习进度/);
+    assert.equal(f.value(), original);
+  }
+});
+
+test('progress save and clear are atomic on storage failures and reread other tabs changes', () => {
+  const f = fixture();
+  const first = f.store.importArticle('One.', 'One');
+  const other = f.makeStore();
+  other.importArticle('Two.', 'Two');
+  other.rename(first.id, 'Other tab title');
+  f.store.saveProgress(first.id, progress());
+  assert.equal(f.store.read().articles.length, 2);
+  assert.equal(f.store.read().articles[0].title, 'Other tab title');
+  const before = f.value();
+  f.storage.setItem = () => { throw new Error('quota'); };
+  assert.throws(() => f.store.saveProgress(first.id, progress({ scrollY: 500 })), /quota/);
+  assert.throws(() => f.store.saveProgress(first.id, null), /quota/);
+  assert.throws(() => f.store.saveProgress(null, progress()), /quota/);
+  assert.equal(f.value(), before);
+  assert.deepEqual(f.makeStore().read().articles[0].progress, progress());
+});
