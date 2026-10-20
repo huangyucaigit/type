@@ -460,7 +460,7 @@
       item.reference.id = `sentenceReference-${number}`;
       item.reference.lang = "en";
       item.reference.tabIndex = 0;
-      item.reference.setAttribute("aria-label", `第 ${number} 组英文范文，可选中后双击查看翻译与雅思用法`);
+      item.reference.setAttribute("aria-label", `第 ${number} 组英文范文，选中英文后点击“翻译与学习”查看翻译与雅思用法`);
       item.reference.setAttribute("aria-describedby", "sentenceHelp");
       item.placeholder = element("p", "reference-placeholder", "范文已隐藏");
       card.append(item.reference, item.placeholder);

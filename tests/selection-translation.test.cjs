@@ -132,14 +132,43 @@ function createPage({ protocol = 'http:', fetcher, source = '', optionalUI = tru
     },
     removeSource(source) { additionalSources.splice(additionalSources.indexOf(source), 1); },
     selectAdditional(source, start = 0, end = source.display.textContent.length,
-      { rect = { left: 80, right: 230, top: 210, bottom: 235, width: 150, height: 25 }, rawText } = {}) {
+      { rect = { left: 80, right: 230, top: 210, bottom: 235, width: 150, height: 25 }, rects, rawText } = {}) {
       const node = source.display.childNodes[0];
       const range = { startContainer: node, startOffset: start, endContainer: node, endOffset: end,
-        getBoundingClientRect: () => rect, getClientRects: () => [rect] };
+        getBoundingClientRect: () => rect, getClientRects: () => rects || [rect] };
       range.cloneRange = () => range;
       document.activeElement = source.display;
       nativeSelection = { isCollapsed: false, rangeCount: 1, anchorNode: node, focusNode: node,
         toString: () => rawText ?? source.display.textContent.slice(start, end), getRangeAt: () => range };
+      return document.emit('selectionchange');
+    },
+    selectAcrossBoundary(source, { edge = 'end', reverse = false, outsideText = '\n\n' } = {}) {
+      const node = source.display.childNodes[0];
+      const outside = new Element();
+      outside.tagName = 'LABEL';
+      const rect = { left: 80, right: 320, top: 210, bottom: 235, width: 240, height: 25 };
+      function makeRange(startContainer, startOffset, endContainer, endOffset) {
+        return {
+          startContainer, startOffset, endContainer, endOffset,
+          setStart(value, offset) { this.startContainer = value; this.startOffset = offset; },
+          setEnd(value, offset) { this.endContainer = value; this.endOffset = offset; },
+          cloneRange() { return makeRange(this.startContainer, this.startOffset, this.endContainer, this.endOffset); },
+          getBoundingClientRect: () => rect,
+          getClientRects: () => [rect],
+          toString() {
+            const from = offsetWithin(source.display, this.startContainer, this.startOffset);
+            const to = offsetWithin(source.display, this.endContainer, this.endOffset);
+            return `${from === null ? outsideText : ''}${source.display.textContent.slice(from ?? 0, to ?? source.display.textContent.length)}${to === null ? outsideText : ''}`;
+          },
+        };
+      }
+      const range = edge === 'end' ? makeRange(node, 0, outside, 0)
+        : makeRange(outside, 0, node, node.textContent.length);
+      nativeSelection = { isCollapsed: false, rangeCount: 1,
+        anchorNode: reverse ? range.endContainer : range.startContainer,
+        focusNode: reverse ? range.startContainer : range.endContainer,
+        toString: () => range.toString(), getRangeAt: () => range };
+      document.activeElement = source.display;
       return document.emit('selectionchange');
     },
     crossSourceSelection(first, second, text = 'Cross source English.') {
@@ -214,6 +243,24 @@ function createPage({ protocol = 'http:', fetcher, source = '', optionalUI = tru
       return document.emit('selectionchange');
     },
     doubleClick: () => elements.display.emit('dblclick'),
+    learnSelection() {
+      const before = requests.length;
+      elements.display.emit('dblclick');
+      assert.equal(requests.length, before, 'double-click only exposes the action');
+      return elements.learnButton.emit('click');
+    },
+    learnInput() {
+      const before = requests.length;
+      elements.input.emit('dblclick');
+      assert.equal(requests.length, before, 'textarea double-click must not request AI');
+      return elements.learnButton.emit('click');
+    },
+    learnAdditional(source) {
+      const before = requests.length;
+      document.emit('dblclick', { target: source.display });
+      assert.equal(requests.length, before, 'reference double-click must not request AI');
+      return elements.learnButton.emit('click');
+    },
     async pressLearnButton({ collapse = true } = {}) {
       await elements.learnButton.emit('pointerdown', { pointerType: 'touch', button: 0 });
       await document.emit('pointerdown', { target: elements.learnButton, pointerType: 'touch', button: 0 });
@@ -244,10 +291,10 @@ test('selecting or releasing a phrase alone never opens the popup or requests tr
   assert.equal(page.requests.length, 0);
 });
 
-test('double-clicking a preserved display selection translates the complete trimmed phrase', async () => {
+test('clicking the desktop learning action translates the complete trimmed phrase', async () => {
   const page = createPage();
   await page.selectDisplay('  An entire phrase.  ');
-  await page.doubleClick();
+  await page.learnSelection();
   assert.equal(page.requests.length, 1);
   assert.equal(page.requests[0].url, '/api/analyze');
   assert.equal(page.requests[0].method, 'POST');
@@ -258,11 +305,199 @@ test('double-clicking a preserved display selection translates the complete trim
   assert.equal(page.popup.attributes.get('aria-busy'), 'false');
 });
 
-test('native textarea selection is translated only after double-click and retains focus', async () => {
+test('desktop word selection and native double-click reveal an action without requesting AI', async () => {
+  const page = createPage();
+  let prevented = false;
+  await page.document.emit('pointerdown', { target: page.display, pointerType: 'mouse', button: 0,
+    detail: 2, clientX: 250, clientY: 170, preventDefault() { prevented = true; } });
+  await page.selectDisplay('practice');
+  await page.doubleClick();
+  assert.equal(prevented, false, 'native word selection is not prevented');
+  assert.equal(page.learnAction.hidden, true, 'selection is not obstructed before pointer release');
+  assert.equal(page.popup.hidden, true);
+  assert.equal(page.requests.length, 0);
+  await page.document.emit('pointerup', { target: page.display, pointerType: 'mouse', button: 0,
+    detail: 2, clientX: 250, clientY: 170 });
+  await page.doubleClick();
+  assert.equal(page.learnAction.hidden, false);
+  assert.equal(page.learnAction.getAttribute('data-layout'), 'floating');
+  assert.equal(page.requests.length, 0);
+  await page.learnButton.emit('click');
+  assert.equal(page.requests.length, 1);
+  assert.equal(page.requests[0].text, 'practice');
+});
+
+test('a third native click can extend a selected word to its paragraph before an explicit request', async () => {
+  const page = createPage();
+  const paragraph = 'Daily practice matters. Small efforts lead to lasting progress.';
+  await page.selectDisplay('practice');
+  await page.doubleClick();
+  assert.equal(page.learnAction.hidden, false);
+  let prevented = false;
+  await page.document.emit('pointerdown', { target: page.display, pointerType: 'mouse', button: 0, detail: 3,
+    clientX: 280, clientY: 170, preventDefault() { prevented = true; } });
+  await page.selectDisplay(paragraph);
+  assert.equal(prevented, false, 'native paragraph selection is not prevented');
+  assert.equal(page.learnAction.hidden, true);
+  assert.equal(page.requests.length, 0);
+  await page.document.emit('pointerup', { target: page.display, pointerType: 'mouse', button: 0, detail: 3,
+    clientX: 280, clientY: 170 });
+  assert.equal(page.learnAction.hidden, false);
+  assert.equal(page.popup.hidden, true);
+  await page.learnButton.emit('click');
+  assert.equal(page.requests.length, 1);
+  assert.equal(page.requests[0].text, paragraph, 'the finalized paragraph replaces the earlier word');
+});
+
+test('desktop dragging waits until release and submits only the latest completed selection', async () => {
+  const page = createPage();
+  await page.document.emit('pointerdown', { target: page.display, pointerType: 'mouse', button: 0 });
+  for (const text of ['Small', 'Small efforts', 'Small efforts lead to progress.']) {
+    await page.selectDisplay(text);
+    assert.equal(page.learnAction.hidden, true);
+    assert.equal(page.requests.length, 0);
+  }
+  await page.document.emit('pointerup', { target: page.display, pointerType: 'mouse', button: 0 });
+  assert.equal(page.learnAction.hidden, false);
+  await page.learnButton.emit('click');
+  assert.equal(page.requests.length, 1);
+  assert.equal(page.requests[0].text, 'Small efforts lead to progress.');
+});
+
+test('Escape and outside clicks dismiss a desktop action until a new source gesture', async () => {
+  for (const dismiss of [page => page.document.emit('keydown', { key: 'Escape' }),
+    page => page.document.emit('pointerdown', { target: {}, pointerType: 'mouse', button: 0 })]) {
+    const page = createPage();
+    await page.selectDisplay('A selected phrase.');
+    assert.equal(page.learnAction.hidden, false);
+    await dismiss(page);
+    assert.equal(page.learnAction.hidden, true);
+    await page.document.emit('selectionchange');
+    await page.doubleClick();
+    await page.learnButton.emit('click');
+    assert.equal(page.learnAction.hidden, true);
+    assert.equal(page.popup.hidden, true);
+    assert.equal(page.requests.length, 0);
+    await page.document.emit('pointerdown', { target: page.display, pointerType: 'mouse', button: 0 });
+    await page.selectDisplay('A selected phrase.');
+    await page.document.emit('pointerup', { target: page.display, pointerType: 'mouse', button: 0 });
+    assert.equal(page.learnAction.hidden, false);
+    await page.learnButton.emit('click');
+    assert.equal(page.requests.length, 1);
+  }
+});
+
+test('the desktop action follows the release point and stays inside viewport edges', async () => {
+  const page = createPage();
+  const source = page.addSource('A wide selected sentence in the reference.');
+  page.learnAction.rect = { left: 0, top: 0, right: 130, bottom: 42, width: 130, height: 42 };
+  const rect = { left: 80, right: 700, top: 200, bottom: 225, width: 620, height: 25 };
+  await page.document.emit('pointerdown', { target: source.display, pointerType: 'mouse', button: 0,
+    clientX: 100, clientY: 215 });
+  await page.selectAdditional(source, 0, source.display.textContent.length, { rect });
+  await page.document.emit('pointerup', { target: source.display, pointerType: 'mouse', button: 0,
+    clientX: 580, clientY: 215 });
+  assert.equal(page.learnAction.hidden, false);
+  assert.equal(page.learnAction.style.left, '580px', 'the action appears next to the release location');
+  assert.equal(page.learnAction.style.top, '235px', 'the action leaves a gap below the selected line');
+  await page.document.emit('pointerdown', { target: source.display, pointerType: 'mouse', button: 0,
+    clientX: 890, clientY: 675 });
+  Object.assign(rect, { left: 600, right: 890, top: 660, bottom: 690, width: 290, height: 30 });
+  await page.selectAdditional(source, 0, source.display.textContent.length, { rect });
+  await page.document.emit('pointerup', { target: source.display, pointerType: 'mouse', button: 0,
+    clientX: 890, clientY: 675 });
+  assert.equal(page.learnAction.style.left, '758px', 'the action cannot overflow the right edge');
+  assert.equal(page.learnAction.style.top, '608px', 'the action moves above the selection near the bottom');
+  Object.assign(rect, { top: 750, bottom: 780 });
+  await page.window.emit('scroll');
+  assert.equal(page.learnAction.hidden, true, 'an offscreen selection leaves no stray floating button');
+  Object.assign(rect, { top: 660, bottom: 690 });
+  await page.window.emit('resize');
+  assert.equal(page.learnAction.hidden, false);
+  assert.equal(page.requests.length, 0);
+});
+
+test('a mouse action near the first line of a selected paragraph avoids all selected lines within the viewport', async () => {
+  for (const scenario of [
+    { width: 900, height: 700, firstTop: 200, expectedTop: 148 },
+    { width: 900, height: 700, firstTop: 20, expectedTop: 115 },
+    { width: 320, height: 320, firstTop: 200, expectedTop: 148 },
+  ]) {
+    const page = createPage();
+    page.window.innerWidth = scenario.width;
+    page.window.innerHeight = scenario.height;
+    page.learnAction.rect = { left: 0, right: 130, top: 0, bottom: 42, width: 130, height: 42 };
+    const source = page.addSource('Selecting a whole paragraph must leave its selected text readable.');
+    const rects = [0, 30, 60].map(offset => ({ left: 80, right: 300, top: scenario.firstTop + offset,
+      bottom: scenario.firstTop + offset + 25, width: 220, height: 25 }));
+    const rect = { ...rects[0], bottom: rects[2].bottom, height: rects[2].bottom - rects[0].top };
+    await page.document.emit('pointerdown', { target: source.display, pointerType: 'mouse', button: 0, detail: 3,
+      clientX: 100, clientY: scenario.firstTop + 10 });
+    await page.selectAdditional(source, 0, source.display.textContent.length, { rect, rects });
+    await page.document.emit('pointerup', { target: source.display, pointerType: 'mouse', button: 0, detail: 3,
+      clientX: 100, clientY: scenario.firstTop + 10 });
+    assert.equal(page.learnAction.hidden, false);
+    const left = Number.parseFloat(page.learnAction.style.left);
+    const top = Number.parseFloat(page.learnAction.style.top);
+    assert.equal(top, scenario.expectedTop);
+    for (const line of rects) {
+      const overlaps = left < line.right && left + 130 > line.left && top < line.bottom && top + 42 > line.top;
+      assert.equal(overlaps, false, 'the floating action cannot cover any selected paragraph line');
+    }
+    assert.ok(left >= 12 && left + 130 <= scenario.width - 12);
+    assert.ok(top >= 12 && top + 42 <= scenario.height - 12);
+    assert.equal(page.requests.length, 0);
+  }
+});
+
+test('inspecting an already open desktop result preserves expanded learning without another request', async () => {
+  const page = createPage();
+  await page.selectDisplay('A phrase to study.');
+  await page.learnSelection();
+  await page.expandButton.emit('click');
+  assert.equal(page.detailsContainer.hidden, false);
+  await page.document.emit('selectionchange');
+  await page.doubleClick();
+  assert.equal(page.detailsContainer.hidden, false);
+  assert.equal(page.popup.hidden, false);
+  assert.equal(page.learnAction.hidden, true);
+  assert.equal(page.requests.length, 1);
+});
+
+test('a desktop textarea action anchors to the released mouse position and follows its input while scrolling', async () => {
+  const page = createPage();
+  page.input.rect = { left: 100, right: 700, top: 80, bottom: 500, width: 600, height: 420 };
+  page.learnAction.rect = { left: 0, right: 130, top: 0, bottom: 42, width: 130, height: 42 };
+  await page.document.emit('pointerdown', { target: page.input, pointerType: 'mouse', button: 0,
+    clientX: 250, clientY: 180 });
+  await page.selectInput('First line. Selected phrase. Last line.', 12, 28);
+  assert.equal(page.learnAction.hidden, true);
+  await page.document.emit('pointerup', { target: page.input, pointerType: 'mouse', button: 0,
+    clientX: 560, clientY: 300 });
+  assert.equal(page.learnAction.hidden, false);
+  assert.equal(page.learnAction.style.left, '560px');
+  assert.equal(page.learnAction.style.top, '310px', 'the action is near the selected text rather than the bottom of the input');
+  Object.assign(page.input.rect, { top: 40, bottom: 460 });
+  await page.window.emit('scroll');
+  assert.equal(page.learnAction.style.left, '560px');
+  assert.equal(page.learnAction.style.top, '270px', 'scrolling preserves the anchor inside the input');
+  assert.equal(page.requests.length, 0);
+  let prevented = false;
+  await page.learnButton.emit('pointerdown', { pointerType: 'mouse', button: 0,
+    preventDefault() { prevented = true; } });
+  assert.equal(prevented, true, 'clicking the action preserves the native input range');
+  await page.learnButton.emit('click');
+  assert.equal(page.requests.length, 1);
+  assert.equal(page.requests[0].text, 'Selected phrase.');
+  assert.equal(page.input.selectionStart, 12);
+  assert.equal(page.input.selectionEnd, 28);
+});
+
+test('native textarea selection is translated only after clicking the action and retains focus', async () => {
   const page = createPage();
   await page.selectInput('first selected phrase last', 6, 21);
   assert.equal(page.requests.length, 0);
-  await page.input.emit('dblclick');
+  await page.learnInput();
   assert.equal(page.requests[0].text, 'selected phrase');
   assert.equal(page.document.activeElement, page.input);
   assert.equal(page.input.selectionStart, 6);
@@ -274,7 +509,7 @@ test('visible display selection wins over an old selected textarea that retains 
   await page.selectInput('Old textarea words.');
   await page.selectDisplay('Visible article phrase.');
   page.document.activeElement = page.input;
-  await page.doubleClick();
+  await page.learnSelection();
   assert.equal(page.requests[0].text, 'Visible article phrase.');
 });
 
@@ -294,27 +529,34 @@ test('in-flight identical requests and completed translations are reused', async
   const waiting = deferred();
   const page = createPage({ fetcher: () => waiting.promise });
   await page.selectDisplay('Reuse this phrase.');
-  const first = page.doubleClick();
-  const second = page.doubleClick();
+  const first = page.learnSelection();
+  await page.selectDisplay('A different selection.');
+  await page.selectDisplay('Reuse this phrase.');
+  const second = page.learnSelection();
   assert.equal(page.requests.length, 1);
   waiting.resolve('重复使用译文。');
   await Promise.all([first, second]);
   page.controller.close();
-  await page.doubleClick();
+  await page.document.emit('pointerdown', { target: page.display, pointerType: 'mouse', button: 0 });
+  await page.selectDisplay('Reuse this phrase.');
+  await page.document.emit('pointerup', { target: page.display, pointerType: 'mouse', button: 0 });
+  assert.equal(page.learnAction.hidden, false);
+  await page.learnSelection();
   assert.equal(page.requests.length, 1);
+  assert.equal(page.popup.hidden, false);
   assert.equal(page.translationLabel.textContent, '重复使用译文。');
 });
 
-test('changing selection hides stale results and only a new double-click can fetch', async () => {
+test('changing selection hides stale results and only a new explicit action can fetch', async () => {
   const waiting = deferred();
   const page = createPage({ fetcher: text => text === 'Old phrase.' ? waiting.promise
     : { ok: true, json: async () => analysisResponse('新译文。') } });
   await page.selectDisplay('Old phrase.');
-  const pending = page.doubleClick();
+  const pending = page.learnSelection();
   await page.selectDisplay('New phrase.');
   assert.equal(page.popup.hidden, true);
   assert.equal(page.requests.length, 1);
-  await page.doubleClick();
+  await page.learnSelection();
   waiting.resolve('过期译文。');
   await pending;
   assert.equal(page.translationLabel.textContent, '新译文。');
@@ -334,7 +576,7 @@ test('typing, reset, outside click, Escape and inactive mode invalidate pending 
     const waiting = deferred();
     const page = createPage({ fetcher: () => waiting.promise });
     await page.selectDisplay('Pending phrase.');
-    const pending = page.doubleClick();
+    const pending = page.learnSelection();
     await action(page);
     waiting.resolve('不得显示。');
     await pending;
@@ -346,12 +588,12 @@ test('typing, reset, outside click, Escape and inactive mode invalidate pending 
 test('oversized selections and file pages explain the next step without fetching', async () => {
   const page = createPage();
   await page.selectDisplay('x'.repeat(2001));
-  await page.doubleClick();
+  await page.learnSelection();
   assert.match(page.statusLabel.textContent, /2000/);
   assert.equal(page.requests.length, 0);
   const local = createPage({ protocol: 'file:' });
   await local.selectDisplay('Example phrase.');
-  await local.doubleClick();
+  await local.learnSelection();
   assert.match(local.statusLabel.textContent, /启动翻译\.cmd/);
   assert.match(local.statusLabel.textContent, /127\.0\.0\.1:4173/);
   assert.equal(local.requests.length, 0);
@@ -363,7 +605,7 @@ test('HTTP failure shows a safe message and retry keeps the selected phrase', as
     ? { ok: false, status: 503, json: async () => ({ error: 'secret upstream details'.repeat(30) }) }
     : { ok: true, json: async () => analysisResponse('成功。') } });
   await page.selectDisplay('Try again.');
-  await page.doubleClick();
+  await page.learnSelection();
   assert.equal(page.retryButton.hidden, false);
   assert.match(page.statusLabel.textContent, /尚未配置/);
   assert.doesNotMatch(page.statusLabel.textContent, /secret/);
@@ -381,7 +623,7 @@ test('short server explanations distinguish insufficient balance from configurat
   const page = createPage({ fetcher: () => ({ ok: false, status: 503,
     json: async () => ({ error: '翻译账户余额不足，请充值后重试。' }) }) });
   await page.selectDisplay('Translate this.');
-  await page.doubleClick();
+  await page.learnSelection();
   assert.equal(page.statusLabel.textContent, '翻译账户余额不足，请充值后重试。');
   assert.equal(page.retryButton.hidden, false);
 });
@@ -389,7 +631,7 @@ test('short server explanations distinguish insufficient balance from configurat
 test('selecting and copying Chinese inside the popup leaves the translation visible', async () => {
   const page = createPage();
   await page.selectDisplay('Copy the Chinese translation.');
-  await page.doubleClick();
+  await page.learnSelection();
   const text = page.translationLabel.textContent;
   await page.document.emit('pointerdown', { target: page.translationLabel, detail: 1 });
   await page.selectPopup(text);
@@ -403,7 +645,7 @@ test('selecting popup source while translation is loading does not discard its r
   const waiting = deferred();
   const page = createPage({ fetcher: () => waiting.promise });
   await page.selectDisplay('Wait for this translation.');
-  const pending = page.doubleClick();
+  const pending = page.learnSelection();
   await page.selectPopup('Wait for this translation.');
   waiting.resolve('等待这段译文。');
   await pending;
@@ -415,11 +657,11 @@ test('selecting popup source while translation is loading does not discard its r
 test('returned markup is assigned as plain text and malformed responses remain retryable', async () => {
   const safe = createPage({ fetcher: () => ({ ok: true, json: async () => analysisResponse('<img src=x onerror=alert(1)>') }) });
   await safe.selectDisplay('Markup.');
-  await safe.doubleClick();
+  await safe.learnSelection();
   assert.equal(safe.translationLabel.textContent, '<img src=x onerror=alert(1)>');
   const invalid = createPage({ fetcher: () => ({ ok: true, json: async () => ({ translation: 42 }) }) });
   await invalid.selectDisplay('Invalid.');
-  await invalid.doubleClick();
+  await invalid.learnSelection();
   assert.equal(invalid.retryButton.hidden, false);
   assert.match(invalid.statusLabel.textContent, /有效学习分析/);
 });
@@ -429,7 +671,7 @@ test('desktop popover fits the viewport and repositions on resize and nested scr
   page.window.innerWidth = 700;
   page.window.innerHeight = 400;
   await page.selectDisplay('Near the edge.', { left: 690, top: 350, bottom: 375, width: 20, height: 25 });
-  await page.doubleClick();
+  await page.learnSelection();
   assert.equal(page.popup.style.left, '358px');
   assert.equal(page.popup.style.top, '150px');
   page.window.innerHeight = 700;
@@ -443,10 +685,10 @@ test('cached entries are bounded and oldest entries are re-requested after 100 d
   const page = createPage();
   for (let i = 0; i < 101; i += 1) {
     await page.selectDisplay(`Phrase ${i}.`);
-    await page.doubleClick();
+    await page.learnSelection();
   }
   await page.selectDisplay('Phrase 0.');
-  await page.doubleClick();
+  await page.learnSelection();
   assert.equal(page.requests.length, 102);
 });
 
@@ -470,7 +712,7 @@ test('word, sentence and passage analyses render brief rows and collapsed learni
   ]) {
     const page = createPage({ fetcher: () => ({ ok: true, json: async () => analysisResponse('中文说明。', type) }) });
     await page.selectDisplay(text);
-    await page.doubleClick();
+    await page.learnSelection();
     assert.equal(page.typeLabel.textContent, label);
     assert.equal(page.briefContainer.childNodes.length, 1);
     assert.equal(page.briefContainer.childNodes[0].className, 'selection-analysis-row');
@@ -496,7 +738,7 @@ test('older cached usage and warning rows move into collapsed learning without c
   const page = createPage({ fetcher: () => ({ ok: true, json: async () => payload }) });
   const labels = container => Array.from(container.childNodes, row => row.childNodes[0].textContent);
   await page.selectDisplay('progress');
-  await page.doubleClick();
+  await page.learnSelection();
   assert.deepEqual(labels(page.briefContainer), ['语境意思']);
   assert.deepEqual(labels(page.detailsContainer), ['**核心用法：**', '`易错提醒:`', '仿写任务']);
   assert.equal(page.detailsContainer.hidden, true);
@@ -504,8 +746,12 @@ test('older cached usage and warning rows move into collapsed learning without c
   assert.equal(page.detailsContainer.hidden, false);
   assert.equal(page.requests.length, 1);
   await page.closeButton.emit('click');
+  await page.document.emit('pointerdown', { target: page.display, pointerType: 'mouse', button: 0 });
   await page.selectDisplay('progress');
-  await page.doubleClick();
+  await page.document.emit('pointerup', { target: page.display, pointerType: 'mouse', button: 0 });
+  assert.equal(page.learnAction.hidden, false);
+  await page.learnSelection();
+  assert.equal(page.popup.hidden, false);
   assert.equal(page.detailsContainer.hidden, true);
   assert.equal(page.detailsContainer.childNodes.length, 3);
   assert.equal(page.requests.length, 1);
@@ -517,7 +763,7 @@ test('a brief made entirely of usage and warning rows leaves only the translatio
     brief: [{ label: '核心用法', text: '不可数名词。' }, { label: '易错提醒', text: '不要加 a。' }],
   }) }) });
   await page.selectDisplay('progress');
-  await page.doubleClick();
+  await page.learnSelection();
   assert.equal(page.translationLabel.textContent, '进步。');
   assert.equal(page.briefContainer.childNodes.length, 0);
   assert.equal(page.detailsContainer.childNodes.length, 3);
@@ -531,7 +777,7 @@ test('a brief made entirely of usage and warning rows leaves only the translatio
 test('expanding and collapsing learning details makes no extra request and new selections reset expansion', async () => {
   const page = createPage();
   await page.selectDisplay('First learning phrase.');
-  await page.doubleClick();
+  await page.learnSelection();
   await page.expandButton.emit('click');
   assert.equal(page.detailsContainer.hidden, false);
   assert.equal(page.expandButton.textContent, '收起学习');
@@ -541,7 +787,7 @@ test('expanding and collapsing learning details makes no extra request and new s
   assert.equal(page.requests.length, 1);
   await page.expandButton.emit('click');
   await page.selectDisplay('A different learning phrase.');
-  await page.doubleClick();
+  await page.learnSelection();
   assert.equal(page.detailsContainer.hidden, true);
   assert.equal(page.expandButton.attributes.get('aria-expanded'), 'false');
   assert.equal(page.requests.length, 2);
@@ -553,7 +799,7 @@ test('rendered markup in brief and detail entries remains ordinary text', async 
     brief: [{ label: marker, text: marker }], details: [{ label: marker, text: marker }],
   }) }) });
   await page.selectDisplay('word');
-  await page.doubleClick();
+  await page.learnSelection();
   assert.equal(page.briefContainer.childNodes[0].childNodes[0].textContent, marker);
   assert.equal(page.detailsContainer.childNodes[0].childNodes[1].textContent, marker);
   assert.equal(page.briefContainer.childNodes[0].childNodes[0].childNodes.length, 0);
@@ -565,17 +811,17 @@ test('duplicate words in different locations receive their own sentence and para
   const first = source.indexOf('progress');
   const second = source.lastIndexOf('progress');
   await page.selectRange(first, first + 8);
-  await page.doubleClick();
+  await page.learnSelection();
   assert.equal(page.requests[0].context.sentence, 'Students make progress through practice.');
   assert.equal(page.requests[0].context.paragraph, 'Students make progress through practice.');
   await page.selectRange(second, second + 8);
   assert.equal(page.popup.hidden, true);
-  await page.doubleClick();
+  await page.learnSelection();
   assert.equal(page.requests.length, 2);
   assert.equal(page.requests[1].context.sentence, 'Technology can accelerate progress in medicine.');
   assert.equal(page.requests[1].context.paragraph, 'Technology can accelerate progress in medicine.');
   await page.selectRange(first, first + 8);
-  await page.doubleClick();
+  await page.learnSelection();
   assert.equal(page.requests.length, 2);
 });
 
@@ -585,7 +831,7 @@ test('sentence and multi-sentence selections include enclosing context without l
   const start = source.indexOf('Small');
   const end = source.indexOf('\n');
   await page.selectRange(start, end);
-  await page.doubleClick();
+  await page.learnSelection();
   assert.equal(page.requests[0].text, 'Small efforts bring progress. Keep going.');
   assert.equal(page.requests[0].context.sentence, 'Small efforts bring progress. Keep going.');
   assert.equal(page.requests[0].context.paragraph, 'Practice matters. Small efforts bring progress. Keep going.');
@@ -596,7 +842,7 @@ test('native textarea positions attach the correct occurrence and preserve inter
   const page = createPage({ source });
   const start = source.lastIndexOf('progress');
   await page.selectInput(source, start, source.length);
-  await page.input.emit('dblclick');
+  await page.learnInput();
   assert.equal(page.requests[0].text, 'progress with  two spaces.');
   assert.equal(page.requests[0].context.sentence, 'Second progress with  two spaces.');
 });
@@ -607,21 +853,21 @@ test('character spans map Unicode offsets despite an earlier typo with a differe
   const page = createPage({ source });
   const start = actual.indexOf('word');
   await page.selectRange(start, start + 4, actual);
-  await page.doubleClick();
+  await page.learnSelection();
   assert.equal(page.requests[0].context.sentence, 'A😀 word.');
   const second = actual.lastIndexOf('word');
   await page.selectRange(second, second + 4, actual);
-  await page.doubleClick();
+  await page.learnSelection();
   assert.equal(page.requests[1].context.sentence, 'Another word.');
 });
 
 test('unknown or mismatching selection positions safely send empty context', async () => {
   const page = createPage({ source: 'The reference is correct.' });
   await page.selectDisplay('unknown phrase');
-  await page.doubleClick();
+  await page.learnSelection();
   assert.deepEqual(page.requests[0].context, { sentence: '', paragraph: '' });
   await page.selectRange(4, 13, 'The different is correct.');
-  await page.doubleClick();
+  await page.learnSelection();
   assert.deepEqual(page.requests[1].context, { sentence: '', paragraph: '' });
 });
 
@@ -630,7 +876,7 @@ test('long contexts are bounded and explicitly marked as truncated', async () =>
   const page = createPage({ source });
   const start = source.indexOf('target');
   await page.selectRange(start, start + 6);
-  await page.doubleClick();
+  await page.learnSelection();
   assert.ok(page.requests[0].context.sentence.length <= 1200);
   assert.ok(page.requests[0].context.paragraph.length <= 3000);
   assert.match(page.requests[0].context.sentence, /前文已截断/);
@@ -660,7 +906,7 @@ test('invalid analysis type or empty rows are retryable and failed results are n
     const page = createPage({ fetcher: () => ({ ok: true, json: async () => ++calls === 1
       ? analysisResponse('译文。', 'word', extras) : analysisResponse('恢复成功。', 'word') }) });
     await page.selectDisplay('word');
-    await page.doubleClick();
+    await page.learnSelection();
     assert.equal(page.retryButton.hidden, false);
     assert.equal(page.expandButton.hidden, true);
     await page.retryButton.emit('click');
@@ -672,7 +918,7 @@ test('invalid analysis type or empty rows are retryable and failed results are n
 test('analysis remains usable without optional learning-panel elements', async () => {
   const page = createPage({ optionalUI: false });
   await page.selectDisplay('Compatible phrase.');
-  await page.doubleClick();
+  await page.learnSelection();
   assert.equal(page.translationLabel.textContent, '中文：Compatible phrase.');
   assert.equal(page.retryButton.hidden, true);
 });
@@ -681,7 +927,7 @@ test('keyboard focus inside the popup keeps a pending native-input analysis and 
   const waiting = deferred();
   const page = createPage({ fetcher: () => waiting.promise });
   await page.selectInput('Native selected phrase.');
-  const pending = page.input.emit('dblclick');
+  const pending = page.learnInput();
   page.document.activeElement = page.closeButton;
   await page.clearSelection();
   assert.equal(page.popup.hidden, false);
@@ -701,7 +947,7 @@ test('retry from popup keyboard focus retains the selected text and moves focus 
   const page = createPage({ fetcher: () => ++calls === 1 ? { ok: false, status: 503, json: async () => ({}) }
     : { ok: true, json: async () => analysisResponse('重试成功。') } });
   await page.selectInput('Retry native selection.');
-  await page.input.emit('dblclick');
+  await page.learnInput();
   page.document.activeElement = page.retryButton;
   await page.clearSelection();
   assert.equal(page.popup.hidden, false);
@@ -716,7 +962,7 @@ test('a temporarily collapsed selection while starting to copy popup text keeps 
   const waiting = deferred();
   const page = createPage({ fetcher: () => waiting.promise });
   await page.selectDisplay('Copy after waiting.');
-  const pending = page.doubleClick();
+  const pending = page.learnSelection();
   await page.document.emit('pointerdown', { target: page.sourceLabel });
   await page.clearSelection();
   assert.equal(page.popup.hidden, false);
@@ -732,17 +978,17 @@ test('a temporarily collapsed selection while starting to copy popup text keeps 
 test('a new whitespace source selection still dismisses a previously engaged popup without any request', async () => {
   const page = createPage();
   await page.selectDisplay('First phrase.');
-  await page.doubleClick();
+  await page.learnSelection();
   await page.document.emit('pointerdown', { target: page.translationLabel });
   await page.clearSelection();
   assert.equal(page.popup.hidden, false);
   await page.selectDisplay('   ');
   assert.equal(page.popup.hidden, true);
-  await page.doubleClick();
+  await page.learnSelection();
   assert.equal(page.requests.length, 1);
 });
 
-test('additional sentence references analyse only after double-click and include their full-article context', async () => {
+test('additional sentence references analyse only after the learning action and include their full-article context', async () => {
   const article = 'Practice brings progress.\n\nTechnology accelerates progress in medicine.';
   const page = createPage({ source: article });
   page.primaryActive(false);
@@ -751,17 +997,17 @@ test('additional sentence references analyse only after double-click and include
   const second = page.addSource(secondText, { article, offset: article.indexOf(secondText) });
   await page.selectAdditional(first, 16, 24);
   assert.equal(page.requests.length, 0);
-  await page.doubleClickAdditional(first);
+  await page.learnAdditional(first);
   assert.equal(page.requests[0].text, 'progress');
   assert.equal(page.requests[0].context.sentence, 'Practice brings progress.');
   await page.selectAdditional(second, 23, 31);
   assert.equal(page.popup.hidden, true);
-  await page.doubleClickAdditional(second);
+  await page.learnAdditional(second);
   assert.equal(page.requests[1].text, 'progress');
   assert.equal(page.requests[1].context.paragraph, secondText);
   assert.equal(page.requests.length, 2);
   await page.selectAdditional(first, 16, 24);
-  await page.doubleClickAdditional(first);
+  await page.learnAdditional(first);
   assert.equal(page.requests.length, 2);
 });
 
@@ -778,7 +1024,7 @@ test('group-local selections map to original article offsets across normalised s
       end: secondStart + end - text.indexOf('Second') };
   } });
   await page.selectAdditional(source, 0, text.length, { rawText: text });
-  await page.doubleClickAdditional(source);
+  await page.learnAdditional(source);
   assert.deepEqual(calls[0], [0, text.length]);
   assert.equal(page.requests[0].text, text);
   assert.equal(page.requests[0].context.paragraph, 'First sentence.   \nSecond sentence.');
@@ -794,7 +1040,7 @@ test('additional selection mapping trims only selection edges and preserves loca
     return { source: text, start, end };
   } });
   await page.selectAdditional(source);
-  await page.doubleClickAdditional(source);
+  await page.learnAdditional(source);
   assert.deepEqual(calls[0], [2, text.length - 2]);
   assert.equal(page.requests[0].text, 'Words with  two spaces.');
 });
@@ -819,28 +1065,74 @@ test('cross-reference, hidden-reference and non-reference double-clicks make no 
   assert.equal(page.requests.length, 0);
 });
 
+test('native paragraph selection can include a neighboring block boundary containing only rendered newlines', async () => {
+  const article = 'Earlier context.\n\nLearning a language rewards patience and regular practice.\n\nLater context.';
+  const text = 'Learning a language rewards patience and regular practice.';
+  for (const gesture of [{ edge: 'end' }, { edge: 'start', reverse: true }]) {
+    const page = createPage({ source: article });
+    page.primaryActive(false);
+    const source = page.addSource(text, { article, offset: article.indexOf(text) });
+    await page.document.emit('pointerdown', { target: source.display, pointerType: 'mouse', button: 0, detail: 3 });
+    await page.selectAcrossBoundary(source, gesture);
+    assert.equal(page.learnAction.hidden, true, 'the native paragraph gesture completes before showing the action');
+    await page.document.emit('pointerup', { target: source.display, pointerType: 'mouse', button: 0, detail: 3 });
+    assert.equal(page.learnAction.hidden, false, 'rendered block whitespace does not suppress a valid paragraph');
+    assert.equal(page.requests.length, 0);
+    assert.equal(page.popup.hidden, true);
+    assert.equal(page.window.getSelection().toString(), gesture.edge === 'end' ? `${text}\n\n` : `\n\n${text}`,
+      'cropping analysis boundaries must not mutate the learner\'s native selection');
+    await page.learnButton.emit('click');
+    assert.equal(page.requests.length, 1);
+    assert.equal(page.requests[0].text, text);
+    assert.equal(page.requests[0].context.sentence, text);
+    assert.equal(page.requests[0].context.paragraph, text);
+  }
+});
+
+test('paragraph boundary normalization never crops meaningful outside text into a valid reference selection', async () => {
+  for (const gesture of [{ edge: 'end', outsideText: '\n\nYour input' },
+    { edge: 'start', reverse: true, outsideText: 'Outside heading\n\n' }]) {
+    const page = createPage();
+    await page.selectInput('An older selected textarea phrase.');
+    const source = page.addSource('Learning a language rewards regular practice.');
+    await page.selectAcrossBoundary(source, gesture);
+    page.document.activeElement = page.input;
+    await page.document.emit('selectionchange');
+    await page.doubleClickAdditional(source);
+    assert.equal(page.learnAction.hidden, true);
+    assert.equal(page.requests.length, 0);
+    await page.learnButton.emit('click');
+    assert.equal(page.requests.length, 0, 'neither cropped reference text nor stale textarea text can be submitted');
+    assert.equal(page.popup.hidden, true);
+  }
+});
+
 test('extra references filter whitespace, Chinese, numbers and symbols before requesting', async () => {
   for (const text of ['   \n\t ', '纯中文', '12345', '!?…']) {
     const page = createPage();
     const source = page.addSource(text);
     await page.selectAdditional(source);
-    await page.doubleClickAdditional(source);
+    await page.learnAdditional(source);
     assert.equal(page.requests.length, 0);
     assert.equal(page.popup.hidden, true);
   }
 });
 
-test('double-click preservation keeps the whole dragged extra-reference phrase without focusing the typing input', async () => {
+test('native reference pointer actions remain unblocked before explicitly learning a selected phrase', async () => {
   const page = createPage();
   const source = page.addSource('An entire sentence for learning.');
   await page.selectAdditional(source);
   let prevented = false;
   await page.document.emit('pointerdown', { target: source.display.childNodes[0], button: 0,
     clientX: 100, clientY: 220, preventDefault() { prevented = true; } });
-  assert.equal(prevented, true);
+  assert.equal(prevented, false);
+  await page.selectAdditional(source);
   assert.equal(page.document.activeElement, source.display);
   assert.equal(page.requests.length, 0);
-  await page.doubleClickAdditional(source);
+  assert.equal(page.learnAction.hidden, true, 'dragging cannot expose a button in the selection path');
+  await page.document.emit('pointerup', { target: source.display, button: 0, clientX: 220, clientY: 220 });
+  assert.equal(page.learnAction.hidden, false);
+  await page.learnAdditional(source);
   assert.equal(page.requests[0].text, 'An entire sentence for learning.');
   assert.equal(page.document.activeElement, source.display);
 });
@@ -862,15 +1154,15 @@ test('inactive primary typing selections cannot request or override active sente
   const page = createPage();
   await page.selectInput('Old realtime selection.');
   page.primaryActive(false);
-  await page.input.emit('dblclick');
-  await page.doubleClick();
+  await page.learnInput();
+  await page.learnSelection();
   assert.equal(page.requests.length, 0);
   const source = page.addSource('Current sentence reference.');
   await page.selectAdditional(source);
   page.document.activeElement = page.input;
-  await page.doubleClickAdditional(source);
+  await page.learnAdditional(source);
   assert.equal(page.requests[0].text, 'Current sentence reference.');
-  await page.doubleClick();
+  await page.learnSelection();
   assert.equal(page.requests.length, 1);
 });
 
@@ -882,11 +1174,11 @@ test('additional popup positioning uses the selected reference area when Range g
   second.area.rect = { left: 450, top: 300, bottom: 340, width: 200, height: 40 };
   const rect = { left: 0, top: 0, bottom: 0, width: 0, height: 0 };
   await page.selectAdditional(first, 0, first.display.textContent.length, { rect });
-  await page.doubleClickAdditional(first);
+  await page.learnAdditional(first);
   assert.equal(page.popup.style.left, '70px');
   assert.equal(page.popup.style.top, '150px');
   await page.selectAdditional(second, 0, second.display.textContent.length, { rect });
-  await page.doubleClickAdditional(second);
+  await page.learnAdditional(second);
   assert.equal(page.popup.style.left, '450px');
   assert.equal(page.popup.style.top, '350px');
 });
@@ -898,7 +1190,7 @@ test('hidden, removed or reset additional sources cannot display pending respons
     const page = createPage({ fetcher: () => waiting.promise });
     const source = page.addSource('Pending extra reference.');
     await page.selectAdditional(source);
-    const pending = page.doubleClickAdditional(source);
+    const pending = page.learnAdditional(source);
     await page.document.emit('pointerdown', { target: page.sourceLabel });
     await page.selectPopup('Pending extra reference.');
     deactivate(source, page);
@@ -918,11 +1210,11 @@ test('unreliable local ranges and invalid article mappings safely omit context',
     return { source: 'Original article.', start: -1, end: 100 };
   } });
   await page.selectAdditional(source, 0, 7, { rawText: 'Changed' });
-  await page.doubleClickAdditional(source);
+  await page.learnAdditional(source);
   assert.equal(mappingCalls, 0);
   assert.deepEqual(page.requests[0].context, { sentence: '', paragraph: '' });
   await page.selectAdditional(source);
-  await page.doubleClickAdditional(source);
+  await page.learnAdditional(source);
   assert.ok(mappingCalls > 0);
   assert.deepEqual(page.requests[1].context, { sentence: '', paragraph: '' });
 });
@@ -931,7 +1223,7 @@ test('extra-source popup details expand and copy without another request', async
   const page = createPage();
   const source = page.addSource('Learn from this sentence.');
   await page.selectAdditional(source);
-  await page.doubleClickAdditional(source);
+  await page.learnAdditional(source);
   await page.expandButton.emit('click');
   assert.equal(page.detailsContainer.hidden, false);
   await page.selectPopup('结合当前语境理解。');
@@ -953,7 +1245,7 @@ test('touch-capable and coarse-pointer devices expose learning only after select
   }
 });
 
-test('touch and pen interactions enable the learning action while mouse retains double-click behavior', async () => {
+test('touch, pen and mouse interactions require the same explicit learning action', async () => {
   for (const pointerType of ['touch', 'pen']) {
     const page = createPage();
     await page.document.emit('pointerdown', { target: page.display, pointerType });
@@ -962,8 +1254,12 @@ test('touch and pen interactions enable the learning action while mouse retains 
     assert.equal(page.requests.length, 0);
     await page.document.emit('pointerdown', { target: page.display, pointerType: 'mouse' });
     await page.document.emit('selectionchange');
-    assert.equal(page.learnAction.hidden, true);
+    assert.equal(page.learnAction.hidden, true, 'the action waits for the mouse selection gesture to finish');
+    await page.document.emit('pointerup', { target: page.display, pointerType: 'mouse' });
+    assert.equal(page.learnAction.hidden, false);
     await page.doubleClick();
+    assert.equal(page.requests.length, 0);
+    await page.learnButton.emit('click');
     assert.equal(page.requests.length, 1);
     assert.equal(page.requests[0].text, 'Touch selected English.');
   }
@@ -1125,13 +1421,12 @@ test('new touch selections and resets discard pending learning responses', async
   }
 });
 
-test('desktop double-click remains available when the touch action UI is absent', async () => {
+test('missing action markup never falls back to charging AI on double-click', async () => {
   const page = createPage({ touchUI: false });
   await page.selectDisplay('Compatible older page.');
   await page.doubleClick();
-  assert.equal(page.requests.length, 1);
-  assert.equal(page.popup.hidden, false);
-  assert.equal(page.translationLabel.textContent, '中文：Compatible older page.');
+  assert.equal(page.requests.length, 0);
+  assert.equal(page.popup.hidden, true);
 });
 
 test('phone learning action and bottom panel follow the visible viewport when the keyboard changes its bounds', async () => {

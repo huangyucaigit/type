@@ -199,12 +199,12 @@ test('a range including pending source cannot replace an unrelated native draft 
   assert.equal(p.input.selectionEnd, 3);
 });
 
-test('primary clicks inside an existing phrase preserve it through both double-click presses', () => {
+test('successive clicks inside selected text keep native word and paragraph selection available', () => {
   const p = page();
   const range = p.select(4, 13);
-  for (let count = 0; count < 2; count++) {
+  for (let count = 0; count < 3; count++) {
     const event = p.pointerDown({ clientX: 50, clientY: 40 });
-    assert.equal(event.defaultPrevented, true);
+    assert.equal(event.defaultPrevented, false);
     p.pointerUp();
     assert.equal(p.selection.getRangeAt(0), range);
     assert.equal(range.toString(), 'beta gamm');

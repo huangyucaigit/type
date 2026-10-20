@@ -130,16 +130,8 @@
       // Native touch selection handles and long-press menus need their default
       // pointer behavior, even when the gesture begins inside an existing range.
       if (pointerGesture.direct) return;
-      const range = sourceRange();
-      if (!range || collapsed(range) || typeof range.getClientRects !== "function") return;
-      // Preserve a whole dragged phrase through the two clicks of a double
-      // click. Otherwise the browser would reduce it to a single word first.
-      const withinSelection = Array.from(range.getClientRects()).some(rect =>
-        rect.width !== 0 && rect.height !== 0 &&
-        event.clientX >= rect.left && event.clientX <= rect.right &&
-        event.clientY >= rect.top && event.clientY <= rect.bottom
-      );
-      if (withinSelection) event.preventDefault();
+      // Leave mouse defaults intact: double-click selects a word and a third
+      // click extends to a paragraph. Learning uses a separate action button.
     }
 
     function pointerTime(event) {

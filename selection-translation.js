@@ -21,6 +21,8 @@
     let pressedSelection = null;
     let actionPressed = false;
     let actionPointerId = null;
+    let selectingWithMouse = false;
+    let selectionPoint = null;
     let touchInteraction = Boolean(window.navigator?.maxTouchPoints > 0);
     try { touchInteraction ||= Boolean(window.matchMedia?.("(any-pointer: coarse)").matches); } catch { /* Pointer events also identify touch devices. */ }
 
@@ -221,21 +223,40 @@
       return false;
     }
 
+    function scopedSelection(selected, sourceDisplay) {
+      if (contains(sourceDisplay, selected.anchorNode) && contains(sourceDisplay, selected.focusNode)) return selected;
+      // A native triple-click may end at the next block's offset zero, after
+      // the paragraph's rendered newline. Crop only when the excluded part is
+      // whitespace; selections containing another group's text stay invalid.
+      try {
+        const range = selected.getRangeAt(0).cloneRange();
+        const startsInside = contains(sourceDisplay, range.startContainer);
+        const endsInside = contains(sourceDisplay, range.endContainer);
+        if (!startsInside && !endsInside) return null;
+        if (!startsInside) range.setStart(sourceDisplay, 0);
+        if (!endsInside) range.setEnd(sourceDisplay, sourceDisplay.childNodes.length);
+        const raw = range.toString();
+        if (!raw.trim() || raw.trim() !== String(selected.toString()).trim()) return null;
+        return { toString: () => raw, getRangeAt: () => range };
+      } catch { return null; }
+    }
+
     function selection() {
       if (!isActive()) return null;
       const selected = typeof window.getSelection === "function" ? window.getSelection() : null;
       if (selected && !selected.isCollapsed && selected.rangeCount) {
-        const source = additionalSources().find(candidate => contains(candidate.display, selected.anchorNode)
-          && contains(candidate.display, selected.focusNode));
-        if (source) return additionalSelection(selected, source);
+        for (const source of additionalSources()) {
+          const scoped = scopedSelection(selected, source.display);
+          if (scoped) return additionalSelection(scoped, source);
+        }
       }
-      if (isPrimaryActive() && selected && !selected.isCollapsed && selected.rangeCount
-        && contains(display, selected.anchorNode) && contains(display, selected.focusNode)) {
-        const raw = String(selected.toString());
+      const primary = isPrimaryActive() && selected && !selected.isCollapsed && selected.rangeCount ? scopedSelection(selected, display) : null;
+      if (primary) {
+        const raw = String(primary.toString());
         const text = raw.trim();
         if (text) {
           let range = null;
-          try { range = selected.getRangeAt(0).cloneRange(); } catch { /* Some embedded environments omit Range APIs. */ }
+          try { range = primary.getRangeAt(0).cloneRange(); } catch { /* Some embedded environments omit Range APIs. */ }
           const source = reference();
           const start = range ? displayOffset(range.startContainer, range.startOffset, source) : null;
           const end = range ? displayOffset(range.endContainer, range.endOffset, source) : null;
@@ -298,16 +319,19 @@
     }
 
     function showAction(selected) {
-      if (!learnAction || !learnButton || !touchInteraction || !sourceAvailable(selected) || selected.key === dismissedKey) {
+      if (!learnAction || !learnButton || selectingWithMouse || !sourceAvailable(selected) || selected.key === dismissedKey) {
         hideAction();
         return;
       }
-      actionSelection = selected;
+      actionSelection = { ...selected, actionAnchor: actionSelection?.key === selected.key ? actionSelection.actionAnchor : null };
+      learnAction.setAttribute?.("data-layout", touchInteraction ? "touch" : "floating");
       learnAction.hidden = false;
       positionAction();
     }
 
     function reset() {
+      selectingWithMouse = false;
+      selectionPoint = null;
       close(false);
       dismissedKey = null;
     }
@@ -375,10 +399,67 @@
     }
 
     function positionAction() {
-      if (!learnAction || learnAction.hidden) return;
+      if (!learnAction || !actionSelection) return;
       const view = viewport();
+      if (!touchInteraction) {
+        const selected = actionSelection;
+        let rects = [];
+        try { rects = Array.from(selected.range?.getClientRects?.() || []).filter(rect => rect.width && rect.height); } catch { /* Use the enclosing range below. */ }
+        let rect = selected.rect;
+        try { rect ||= selected.range?.getBoundingClientRect?.(); } catch { /* Use the source region when native geometry is unavailable. */ }
+        if (rects.length) {
+          if (!selected.actionAnchor) {
+            let index = rects.length - 1;
+            if (selectionPoint) {
+              const distance = candidate => Math.hypot(Math.max(candidate.left - selectionPoint.x, 0, selectionPoint.x - candidate.right),
+                Math.max(candidate.top - selectionPoint.y, 0, selectionPoint.y - candidate.bottom));
+              index = rects.reduce((best, candidate, i) => distance(candidate) < distance(rects[best]) ? i : best, 0);
+            }
+            selected.actionAnchor = { index, offset: selectionPoint ? Math.max(0, Math.min(rects[index].width, selectionPoint.x - rects[index].left)) : 0 };
+          }
+          rect = rects[Math.min(selected.actionAnchor.index, rects.length - 1)];
+        }
+        if (selected.kind === "input" && selectionPoint) {
+          const inputRect = input?.getBoundingClientRect?.();
+          if (inputRect) {
+            selected.actionAnchor ||= { inputX: Math.max(0, Math.min(inputRect.width, selectionPoint.x - inputRect.left)),
+              inputY: Math.max(0, Math.min(inputRect.height, selectionPoint.y - inputRect.top)) };
+            const left = inputRect.left + selected.actionAnchor.inputX;
+            const top = inputRect.top + selected.actionAnchor.inputY;
+            rect = { left, right: left, top, bottom: top, width: 0, height: 0 };
+          }
+        }
+        rect ||= (selected.kind === "input" ? input : selected.area || area)?.getBoundingClientRect?.();
+        if (!rect) return;
+        const margin = 12, gap = 10;
+        learnAction.hidden = rect.bottom < view.top || rect.top > view.bottom || rect.right < view.left || rect.left > view.right;
+        if (learnAction.hidden) return;
+        learnAction.style.width = "max-content";
+        learnAction.style.maxWidth = `${Math.max(1, view.width - margin * 2)}px`;
+        learnAction.style.maxHeight = `${Math.max(1, view.height - margin * 2)}px`;
+        const bounds = learnAction.getBoundingClientRect?.() || {};
+        const width = Math.min(bounds.width || 130, view.width - margin * 2);
+        const height = bounds.height || 42;
+        const anchorX = rect.left + (selected.actionAnchor?.offset || 0);
+        const left = Math.max(view.left + margin, Math.min(anchorX, view.right - width - margin));
+        let top = rect.bottom + gap + height <= view.bottom - margin ? rect.bottom + gap
+          : Math.max(view.top + margin, rect.top - height - gap);
+        const overlapsSelection = y => rects.some(part => left < part.right && left + width > part.left
+          && y < part.bottom && y + height > part.top);
+        if (rects.length && overlapsSelection(top)) {
+          const above = rects.reduce((top, part) => Math.min(top, part.top), Infinity) - height - gap;
+          const below = rects.reduce((bottom, part) => Math.max(bottom, part.bottom), -Infinity) + gap;
+          const alternatives = [above, below].filter(y => y >= view.top + margin && y + height <= view.bottom - margin && !overlapsSelection(y));
+          if (alternatives.length) top = alternatives.sort((a, b) => Math.abs(a - rect.top) - Math.abs(b - rect.top))[0];
+        }
+        learnAction.style.left = `${Math.round(left)}px`;
+        learnAction.style.top = `${Math.round(top)}px`;
+        return;
+      }
+      learnAction.hidden = false;
       const width = Math.max(1, Math.min(340, view.width - 24));
       learnAction.style.width = `${Math.round(width)}px`;
+      learnAction.style.maxWidth = `${Math.max(1, view.width - 24)}px`;
       learnAction.style.maxHeight = `${Math.max(1, Math.floor(view.height - 24))}px`;
       const height = learnAction.getBoundingClientRect?.().height || 72;
       learnAction.style.left = `${Math.round(view.left + (view.width - width) / 2)}px`;
@@ -565,52 +646,37 @@
 
     listen(document, "selectionchange", inspect);
     listen(input, "select", inspect);
-    const translatePrimary = () => {
-      if (touchInteraction) { inspect(); return; }
-      if (isPrimaryActive() && selection()?.kind !== "additional") return translateSelection();
-    };
-    listen(display, "dblclick", translatePrimary);
-    listen(input, "dblclick", translatePrimary);
-    listen(document, "dblclick", (event) => {
-      if (touchInteraction) { inspect(); return; }
-      const source = additionalSources().find(candidate => contains(candidate.display, event.target));
-      if (!source) return;
-      const selected = selection();
-      if (selected?.kind === "additional" && selected.sourceDisplay === source.display) {
-        dismissedKey = null;
-        return translate(selected);
-      }
-    });
+    // Native word/paragraph selection stays local. Only the explicit action
+    // below can request AI, so a third click can still extend a word to a paragraph.
+    listen(display, "dblclick", inspect);
+    listen(input, "dblclick", inspect);
+    listen(document, "dblclick", inspect);
     listen(document, "pointerdown", (event) => {
       if (contains(learnAction, event.target)) return;
       if (touchPointer(event)) touchInteraction = true;
-      else if (event.pointerType === "mouse") { touchInteraction = false; hideAction(); }
+      else if (event.pointerType === "mouse") touchInteraction = false;
       if (contains(popup, event.target)) {
         popupEngaged = Boolean(current && !popup.hidden);
         return;
       }
       popupEngaged = false;
       const sources = additionalSources();
-      const source = sources.find(candidate => contains(candidate.display, event.target));
-      if (source && !touchPointer(event) && (event.button === undefined || event.button === 0)) {
-        const selected = typeof window.getSelection === "function" ? window.getSelection() : null;
-        if (selected && !selected.isCollapsed && selected.rangeCount
-          && contains(source.display, selected.anchorNode) && contains(source.display, selected.focusNode)) {
-          try {
-            const range = selected.getRangeAt(0);
-            const withinSelection = typeof range.getClientRects === "function" && Array.from(range.getClientRects()).some(rect =>
-              rect.width !== 0 && rect.height !== 0 && event.clientX >= rect.left && event.clientX <= rect.right
-              && event.clientY >= rect.top && event.clientY <= rect.bottom);
-            if (withinSelection) event.preventDefault();
-          } catch { /* A normal pointer action remains available without Range geometry. */ }
-        }
-      }
+      const onSource = (isPrimaryActive() && (contains(display, event.target) || contains(input, event.target)))
+        || sources.some(source => contains(source.display, event.target));
+      selectingWithMouse = onSource && !touchPointer(event) && (event.button === undefined || event.button === 0);
+      selectionPoint = Number.isFinite(event.clientX) && Number.isFinite(event.clientY) ? { x: event.clientX, y: event.clientY } : null;
+      hideAction();
       if ((isPrimaryActive() && contains(area, event.target))
         || sources.some(candidate => contains(candidate.area || candidate.display, event.target))) {
         dismissedKey = null;
       } else close();
     });
     listen(document, "pointerup", (event) => {
+      if (selectingWithMouse) {
+        selectingWithMouse = false;
+        selectionPoint = Number.isFinite(event.clientX) && Number.isFinite(event.clientY) ? { x: event.clientX, y: event.clientY } : selectionPoint;
+        inspect();
+      }
       if (!actionPressed || (actionPointerId !== null && event.pointerId !== undefined && event.pointerId !== actionPointerId)) return;
       const bounds = learnButton?.getBoundingClientRect?.();
       const hasPoint = bounds?.width > 0 && bounds?.height > 0 && Number.isFinite(event.clientX) && Number.isFinite(event.clientY);
@@ -619,6 +685,7 @@
       if (!contains(learnButton, event.target) || !insideBounds) close();
     });
     listen(document, "pointercancel", (event) => {
+      selectingWithMouse = false;
       if (actionPressed && actionPointerId !== null && event.pointerId !== undefined && event.pointerId !== actionPointerId) return;
       actionPressed = false;
       pressedSelection = null;
@@ -648,6 +715,9 @@
       pressedSelection = selected;
       actionPressed = true;
       actionPointerId = event.pointerId ?? null;
+      // Mouse focus must not collapse the source range. Touch keeps its native
+      // behavior and uses the saved snapshot when the platform collapses it.
+      if (!touchPointer(event)) event.preventDefault();
     });
     listen(learnButton, "click", () => {
       const selected = pressedSelection || actionSelection;

@@ -180,7 +180,7 @@ function delayedFile(name) {
   return { file: { name, arrayBuffer: () => promise }, resolve: text => resolve(bytes(text)), reject };
 }
 
-test('the real app sends imported context on double-click and learning leaves the draft and stopwatch intact', async () => {
+test('the real app sends imported context only after the learning action and leaves the draft and stopwatch intact', async () => {
   const requests = [];
   const page = createPage({ fetch: async (url, options) => {
     requests.push({ url, body: JSON.parse(options.body) });
@@ -202,6 +202,9 @@ test('the real app sends imported context on double-click and learning leaves th
   await page.fire('typingInput', 'select');
   assert.equal(requests.length, 0);
   await page.fire('typingInput', 'dblclick');
+  assert.equal(requests.length, 0);
+  assert.equal(page.$('selectionLearnAction').hidden, false);
+  await page.fire('selectionLearnButton', 'click');
   assert.equal(requests.length, 1);
   assert.equal(requests[0].url, '/api/analyze');
   assert.equal(requests[0].body.text, 'progress');

@@ -229,6 +229,10 @@ function createPage({ source = 'First sentence. Second sentence! Third sentence?
     fire: (id, name, properties) => $(id).emit(name, properties),
     click: node => node.emit('click'),
     doubleClick: node => node.emit('dblclick'),
+    learnSelection(node) {
+      node.emit('dblclick');
+      return $('selectionLearnButton').emit('click');
+    },
     async key(node, properties = {}) {
       let prevented = false;
       await node.emit('keydown', {
@@ -1132,7 +1136,7 @@ async function learningPage(source, fetcher) {
   return Object.assign(page, { requests });
 }
 
-test('sentence references share contextual IELTS analysis only after double-click without changing practice', async () => {
+test('sentence references share contextual IELTS analysis only after an explicit learning action without changing practice', async () => {
   const source = 'We make progress through practice. Daily effort helps learners.';
   const page = await learningPage(source);
   await page.type(0, 'Keep this private draft');
@@ -1145,7 +1149,7 @@ test('sentence references share contextual IELTS analysis only after double-clic
   await page.document.emit('pointerup', { target: group.reference });
   assert.equal(page.requests.length, 0);
   assert.equal(page.$('selectionTranslationPopup').hidden, true);
-  await page.doubleClick(group.reference);
+  await page.learnSelection(group.reference);
   assert.equal(page.requests.length, 1);
   const [request] = page.requests;
   assert.equal(request.url, '/api/analyze');
@@ -1159,7 +1163,7 @@ test('sentence references share contextual IELTS analysis only after double-clic
   assert.equal(page.$('selectionAnalysisDetails').hidden, false);
   assert.match(page.$('selectionAnalysisDetails').textContent, /仿写任务/);
   await page.fire('selectionAnalysisExpand', 'click');
-  await page.doubleClick(group.reference);
+  await page.learnSelection(group.reference);
   assert.equal(page.requests.length, 1);
   assert.equal(group.answer.value, 'Keep this private draft');
   assert.equal(group.checked.hidden, true);
@@ -1176,7 +1180,7 @@ test('same selected word in different groups uses its actual sentence and indepe
     const display = page.group(index).reference;
     const start = display.textContent.indexOf('progress');
     await page.select(display, start, start + 8);
-    await page.doubleClick(display);
+    await page.learnSelection(display);
   }
   assert.equal(page.requests.length, 2);
   assert.equal(page.requests[0].context.sentence, 'Practice creates progress.');
@@ -1192,15 +1196,15 @@ test('grouped selections map emoji, joined whitespace and cross-paragraph spans 
   const display = page.group(0).reference;
   const start = display.textContent.indexOf('Second');
   await page.select(display, start, start + 'Second progress!'.length);
-  await page.doubleClick(display);
+  await page.learnSelection(display);
   assert.equal(page.requests[0].context.sentence, 'Second progress!');
   assert.equal(page.requests[0].context.paragraph, '😀 First idea.   Second progress!');
   await page.select(display, start, display.textContent.length);
-  await page.doubleClick(display);
+  await page.learnSelection(display);
   assert.equal(page.requests[1].text, 'Second progress! Third progress?');
   assert.equal(page.requests[1].context.paragraph, source);
   await page.select(display);
-  await page.doubleClick(display);
+  await page.learnSelection(display);
   assert.equal(page.requests[2].text, '😀 First idea. Second progress! Third progress?');
   assert.equal(page.requests[2].context.paragraph, source);
 });
@@ -1210,24 +1214,24 @@ test('answers, checked results, Chinese panels, cross-group and hidden reference
   const first = page.group(0), second = page.group(1);
   await page.click(first.toggle);
   await page.select(first.reference);
-  await page.doubleClick(first.reference);
+  await page.learnSelection(first.reference);
   assert.equal(page.requests.length, 0);
   await page.type(0, 'My English answer');
   first.answer.setSelectionRange(0, first.answer.value.length);
-  await page.doubleClick(first.answer);
+  await page.learnSelection(first.answer);
   await page.click(first.check);
   await page.select(first.checked);
-  await page.doubleClick(first.checked);
+  await page.learnSelection(first.checked);
   first.translationContent.textContent = 'Chinese reference with English';
   first.translation.hidden = false;
   await page.select(first.translationContent);
-  await page.doubleClick(first.translationContent);
+  await page.learnSelection(first.translationContent);
   await page.fire('showAllReferences', 'click');
   await page.selectAcross(first.reference, second.reference);
-  await page.doubleClick(first.reference);
+  await page.learnSelection(first.reference);
   await page.select(first.reference);
   await page.click(first.toggle);
-  await page.doubleClick(first.reference);
+  await page.learnSelection(first.reference);
   assert.equal(page.requests.length, 0);
   assert.equal(page.$('selectionTranslationPopup').hidden, true);
 });
@@ -1238,14 +1242,14 @@ test('non-English sentence selections are rejected locally and inactive realtime
   for (const selected of [' ', '中文', '123', '!!!']) {
     const start = display.textContent.indexOf(selected);
     await page.select(display, start, start + selected.length);
-    await page.doubleClick(display);
+    await page.learnSelection(display);
   }
   await page.select(page.$('textDisplay'), 0, 7);
-  await page.doubleClick(page.$('textDisplay'));
+  await page.learnSelection(page.$('textDisplay'));
   assert.equal(page.requests.length, 0);
   await page.select(display, 0, 7);
   await page.fire('realtimeModeButton', 'click');
-  await page.doubleClick(display);
+  await page.learnSelection(display);
   assert.equal(page.requests.length, 0);
 });
 
@@ -1267,7 +1271,7 @@ test('sentence lifecycle and answer events invalidate pending learning responses
     const pending = deferred();
     const page = await learningPage('First English sentence. Second English sentence.', () => pending.promise);
     await page.select(page.group(0).reference, 0, 5);
-    const work = page.doubleClick(page.group(0).reference);
+    const work = page.learnSelection(page.group(0).reference);
     assert.equal(page.requests.length, 1, name);
     assert.equal(page.$('selectionTranslationPopup').hidden, false, name);
     await action(page);
@@ -1285,7 +1289,7 @@ test('editing a checked group dismisses pending learning and preserves the edita
   const group = page.group(0);
   await page.click(group.check);
   await page.select(group.reference, 6, 13);
-  const work = page.doubleClick(group.reference);
+  const work = page.learnSelection(group.reference);
   assert.equal(page.requests[0].text, 'English');
   await page.click(group.edit);
   pending.resolve(analyzed('不得显示的旧分析。'));
