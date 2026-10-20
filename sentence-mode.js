@@ -22,6 +22,7 @@
     let active = true;
     let activeGroup = 0;
     let restoringProgress = false;
+    let progressBatchDepth = 0;
     let progressReady = false;
     let lastProgress = "";
     // Translations belong to the exact English text, independently of practice drafts.
@@ -32,7 +33,7 @@
     const scrollOffset = value => Number.isFinite(value) ? Math.max(0, Math.min(100000000, Math.floor(value))) : 0;
 
     function applyRestoredScroll(item) {
-      if (item.restoredScrollTop === undefined || !active || item.answer.hidden
+      if (item.restoredScrollTop === undefined || !active || item.collapsed || item.answer.hidden
         || (item.answer.getClientRects && !item.answer.getClientRects().length)) return;
       item.answer.scrollTop = item.restoredScrollTop;
       item.restoredScrollTop = undefined;
@@ -61,13 +62,16 @@
             // AI expression review must not be replaced with a strict comparison:
             // valid paraphrases could otherwise become errors after restoration.
             checked: Boolean(item.analysis && !item.analysis.review),
+            collapsed: item.collapsed,
+            ...(item.analysis?.review && item.analysis.completed || item.restoredReviewCompleted
+              ? { reviewCompleted: true } : {}),
           };
         }),
       };
     }
 
     function progressChanged() {
-      if (!progressReady || restoringProgress || items.some(item => item.composing)) return;
+      if (!progressReady || restoringProgress || progressBatchDepth || items.some(item => item.composing)) return;
       const snapshot = getProgress();
       const serialized = JSON.stringify(snapshot);
       if (serialized === lastProgress) return;
@@ -94,6 +98,64 @@
       node.type = "button";
       node.addEventListener("click", action);
       return node;
+    }
+
+    function setCollapsed(item, collapsed, { restore = false, notify = true } = {}) {
+      if (items[item.number - 1] !== item) return;
+      const changed = item.collapsed !== Boolean(collapsed);
+      if (!changed) {
+        if (!collapsed) applyRestoredScroll(item);
+        return;
+      }
+      // Move focus before hiding its containing subtree; expanding never opens
+      // the mobile keyboard or interrupts a learner in another group.
+      if (collapsed && !restore && item.content.contains(document.activeElement)) {
+        item.collapseButton.focus({ preventScroll: true });
+      }
+      item.collapsed = Boolean(collapsed);
+      item.content.hidden = item.collapsed;
+      item.card.classList.toggle("is-collapsed", item.collapsed);
+      item.collapseButton.textContent = item.collapsed ? "展开" : "收起";
+      item.collapseButton.setAttribute("aria-expanded", String(!item.collapsed));
+      item.collapseButton.setAttribute("aria-label", `${item.collapsed ? "展开" : "收起"}第 ${item.number} 组`);
+      item.collapseButton.title = `${item.collapsed ? "展开" : "收起"}第 ${item.number} 组`;
+      if (!item.collapsed) applyRestoredScroll(item);
+      if (notify) {
+        if (!restore) onLearningReset();
+        progressChanged();
+      }
+    }
+
+    function setAllCollapsed(collapsed) {
+      const changed = items.some(item => item.collapsed !== collapsed);
+      progressBatchDepth++;
+      try {
+        // Focus events caused by hiding a body also belong to this one action.
+        items.forEach(item => setCollapsed(item, collapsed, { notify: false }));
+      } finally {
+        progressBatchDepth--;
+      }
+      if (changed) {
+        onLearningReset();
+        progressChanged();
+      }
+    }
+
+    function navigateToGroup(item) {
+      if (!items.includes(item)) return;
+      activeGroup = items.indexOf(item);
+      setCollapsed(item, false);
+      item.collapseButton.focus({ preventScroll: true });
+      item.card.scrollIntoView({ block: "start", behavior: "auto" });
+      progressChanged();
+    }
+
+    function buildProgressSegments() {
+      $("sentenceProgressSegments").replaceChildren(...items.map(item => {
+        item.progressButton = button(String(item.number), "group-progress-segment", () => navigateToGroup(item));
+        item.progressButton.setAttribute("aria-controls", item.content.id);
+        return item.progressButton;
+      }));
     }
 
     function showReference(item, visible) {
@@ -210,25 +272,38 @@
     }
 
     function refreshSummary() {
-      const checked = items.filter((item) => item.analysis).length;
-      const correct = items.filter((item) => item.analysis?.completed).length;
+      const checked = items.filter((item) => item.analysis || item.restoredReviewCompleted).length;
+      const correct = items.filter((item) => item.analysis?.completed || item.restoredReviewCompleted).length;
       const allCorrect = items.length > 0 && correct === items.length;
-      $("sentenceProgress").textContent = `正确完成 ${correct} / ${items.length} 组`;
-      $("sentenceSessionStatus").textContent = allCorrect
+      const progressText = `已完成 ${correct} / ${items.length} 组`;
+      if ($("sentenceProgress").textContent !== progressText) $("sentenceProgress").textContent = progressText;
+      items.forEach(item => {
+        const completed = Boolean(item.analysis?.completed || item.restoredReviewCompleted);
+        if (item.progressCompleted === completed) return;
+        item.progressCompleted = completed;
+        item.progressButton.classList.toggle("is-complete", completed);
+        const label = `第 ${item.number} 组，${completed ? "已完成" : "未完成"}，点击前往`;
+        item.progressButton.setAttribute("aria-label", label);
+        item.progressButton.title = label;
+      });
+      const sessionStatus = allCorrect
         ? "已完成"
         : checked > 0
-          ? `已检查 ${checked} / ${items.length} 组`
+          ? "继续练习"
           : items.some((item) => item.draft.length)
             ? "练习中"
             : "准备开始";
+      if ($("sentenceSessionStatus").textContent !== sessionStatus) $("sentenceSessionStatus").textContent = sessionStatus;
       refreshTimer();
     }
 
     function edit(item, focus = true) {
+      if (item.collapsed && focus) return;
       if (!requireAccess()) return;
       onLearningReset();
       cancelReview(item);
       item.analysis = null;
+      item.restoredReviewCompleted = false;
       item.answer.hidden = false;
       applyRestoredScroll(item);
       item.checkedAnswer.hidden = true;
@@ -353,7 +428,7 @@
     async function review(item) {
       if (window.ZijianAuth && !hasAccess() && !await window.ZijianAuth.ensureAccess()) return;
       if (!requireAccess()) return;
-      if (!active || item.reviewPending || !items.includes(item)) return;
+      if (!active || item.collapsed || item.reviewPending || !items.includes(item)) return;
       edit(item, false);
       showReference(item, true);
       const answer = item.draft.trim();
@@ -409,7 +484,7 @@
         }
         if (!isCurrent()) return;
         const result = validateReview(data?.review, answer);
-        const focusResult = item.card.contains(document.activeElement);
+        const focusResult = !item.collapsed && item.content.contains(document.activeElement);
         const completed = result.languageStatus === "correct" && result.meaningStatus === "consistent";
         item.analysis = { completed, review: result };
         // Different but valid wording is never compared with the strict word diff.
@@ -451,6 +526,7 @@
     }
 
     function checkWords(item, { restore = false } = {}) {
+      if (!restore && item.collapsed) return;
       if (!restore && !requireAccess()) return;
       onLearningReset();
       cancelReview(item);
@@ -458,18 +534,51 @@
       item.reviewPanel.replaceChildren();
       item.reviewLink.hidden = true;
       const analysis = compareWords(item.text, item.draft);
+      item.restoredReviewCompleted = false;
       item.analysis = analysis;
       showReference(item, true);
       item.checkedAnswer.replaceChildren();
+      const missingButton = (missing, inline = false) => {
+        const marker = element("button", inline ? "word-missing" : "missing-word");
+        marker.type = "button";
+        marker.title = `漏写：${missing.text}（原文第 ${missing.expectedIndex + 1} 个词）。点击定位到输入处。`;
+        marker.setAttribute("aria-label", `漏写 ${missing.text}，点击定位到输入处`);
+        if (inline) {
+          marker.append(element("span", "word-missing-text", missing.text));
+        } else marker.textContent = missing.text;
+        marker.addEventListener("click", () => {
+          if (!active || item.collapsed || !items.includes(item) || item.analysis !== analysis || item.checkedAnswer.hidden || !canPractice()) return;
+          edit(item, false);
+          if (item.answer.hidden) return;
+          // Position the caret in the original draft; the hint is never inserted.
+          const offset = Math.min(item.answer.value.length, missing.actualOffset);
+          item.answer.setSelectionRange(offset, offset, "none");
+          // Native focus also scrolls a long textarea to the new caret position.
+          item.answer.focus();
+          activeGroup = items.indexOf(item);
+          progressChanged();
+        });
+        return marker;
+      };
       if (!item.draft.trim()) {
         item.checkedAnswer.append(element("span", "answer-empty", "本组尚未输入内容。"));
       } else {
+        let offset = 0;
+        let missingIndex = 0;
+        const appendMissing = () => {
+          while (missingIndex < analysis.missing.length && analysis.missing[missingIndex].actualOffset <= offset) {
+            item.checkedAnswer.append(missingButton(analysis.missing[missingIndex++], true));
+          }
+        };
         analysis.tokens.forEach((token) => {
+          appendMissing();
           const span = element("span", token.state === "incorrect" ? "word-error" : token.state === "extra" ? "word-extra" : "word-correct", token.text);
           if (token.state === "incorrect") span.title = `应为：${token.expected}`;
           if (token.state === "extra") span.title = "多输入的单词";
           item.checkedAnswer.append(span);
+          offset += token.text.length;
         });
+        appendMissing();
       }
       item.answer.hidden = true;
       item.checkedAnswer.hidden = false;
@@ -478,12 +587,8 @@
       item.missing.replaceChildren();
       item.missing.hidden = analysis.missing.length === 0;
       if (analysis.missing.length) {
-        item.missing.append(element("span", "missing-label", `漏写 ${analysis.missing.length} 词：`));
-        analysis.missing.forEach((missing) => {
-          const span = element("span", "missing-word", missing.text);
-          span.title = `原文第 ${missing.expectedIndex + 1} 个词`;
-          item.missing.append(span);
-        });
+        item.missing.append(element("span", "missing-label", `漏写 ${analysis.missing.length} 词（${item.draft.trim() ? "已在文中标出，" : ""}点击定位修改）：`));
+        analysis.missing.forEach(missing => item.missing.append(missingButton(missing)));
       }
       const incorrect = analysis.tokens.filter((token) => token.state === "incorrect").length;
       const extra = analysis.tokens.filter((token) => token.state === "extra").length;
@@ -495,13 +600,14 @@
       item.card.classList.add("is-checked");
       item.card.classList.toggle("is-correct", analysis.completed);
       refreshSummary();
-      if (!restore) item.checkedAnswer.focus({ preventScroll: true });
+      if (!restore && !item.collapsed) item.checkedAnswer.focus({ preventScroll: true });
       progressChanged();
     }
 
     function buildGroup(group, index, fragments) {
-      const item = { text: group.text, fragments, draft: "", analysis: null, reviewVersion: 0, reviewPending: false };
+      const item = { text: group.text, fragments, draft: "", analysis: null, reviewVersion: 0, reviewPending: false, collapsed: false, restoredReviewCompleted: false };
       const number = index + 1;
+      item.number = number;
       const card = element("article", "sentence-group");
       card.setAttribute("aria-labelledby", `sentenceHeading-${number}`);
       item.card = card;
@@ -512,6 +618,12 @@
       header.append(heading);
       item.state = element("span", "group-state", "待输入");
       header.append(item.state);
+      item.collapseButton = button("收起", "group-collapse", () => setCollapsed(item, !item.collapsed));
+      item.collapseButton.setAttribute("aria-controls", `sentenceContent-${number}`);
+      item.collapseButton.setAttribute("aria-expanded", "true");
+      item.collapseButton.setAttribute("aria-label", `收起第 ${number} 组`);
+      item.collapseButton.title = `收起第 ${number} 组`;
+      header.append(item.collapseButton);
       item.toggle = button("显示范文", "button button-secondary reference-toggle", () => showReference(item, item.reference.hidden));
       item.toggle.setAttribute("aria-controls", `sentenceReference-${number}`);
       item.toggle.setAttribute("aria-label", `第 ${number} 组显示或隐藏范文`);
@@ -520,6 +632,9 @@
       item.translationToggle.setAttribute("aria-expanded", "false");
       item.translationToggle.setAttribute("aria-label", `第 ${number} 组显示或隐藏中文翻译`);
       card.append(header);
+      item.content = element("div", "group-content");
+      item.content.id = `sentenceContent-${number}`;
+      card.append(item.content);
       item.reference = element("p", "sentence-reference", item.text);
       item.reference.id = `sentenceReference-${number}`;
       item.reference.lang = "en";
@@ -527,7 +642,7 @@
       item.reference.setAttribute("aria-label", `第 ${number} 组英文范文，选中英文后点击“翻译与学习”查看翻译与雅思用法`);
       item.reference.setAttribute("aria-describedby", "sentenceHelp");
       item.placeholder = element("p", "reference-placeholder", "范文已隐藏");
-      card.append(item.reference, item.placeholder);
+      item.content.append(item.reference, item.placeholder);
       item.translationPanel = element("section", "sentence-translation");
       item.translationPanel.id = `sentenceTranslation-${number}`;
       item.translationPanel.hidden = true;
@@ -547,7 +662,7 @@
       item.translationLink.rel = "noopener";
       item.translationLink.hidden = true;
       item.translationPanel.append(item.translationContent, item.translationStatus, item.translationRetry, item.translationLink);
-      card.append(item.translationPanel);
+      item.content.append(item.translationPanel);
       item.inputLabel = element("label", "group-input-label", "你的输入");
       item.inputLabel.htmlFor = `sentenceAnswer-${number}`;
       item.answer = element("textarea", "sentence-answer");
@@ -574,7 +689,7 @@
       item.answer.addEventListener("input", () => {
         onLearningReset();
         item.draft = item.answer.value;
-        if (item.analysis || item.reviewPending || item.feedback.textContent) edit(item, false);
+        if (item.analysis || item.restoredReviewCompleted || item.reviewPending || item.feedback.textContent) edit(item, false);
         item.state.textContent = item.draft.length ? "待检查" : "待输入";
         refreshSummary();
         activateGroup(item);
@@ -592,11 +707,11 @@
       item.checkedAnswer.tabIndex = 0;
       item.checkedAnswer.hidden = true;
       item.checkedAnswer.addEventListener("dblclick", (event) => {
-        if (!active || !items.includes(item) || item.checkedAnswer.hidden) return;
+        if (!active || item.collapsed || !items.includes(item) || item.checkedAnswer.hidden) return;
         event.preventDefault();
         edit(item);
       });
-      card.append(item.inputLabel, item.answer, item.checkedAnswer);
+      item.content.append(item.inputLabel, item.answer, item.checkedAnswer);
       item.feedback = element("p", "group-feedback");
       item.feedback.id = `sentenceFeedback-${number}`;
       item.feedback.setAttribute("role", "status");
@@ -627,7 +742,7 @@
       card.addEventListener("keydown", (event) => {
         if (event.key !== "Enter" || !(event.ctrlKey || event.metaKey) || event.altKey
           || event.isComposing || event.keyCode === 229 || item.composing
-          || !active || !items.includes(item)) return;
+          || !active || item.collapsed || !items.includes(item)) return;
         const editing = event.target === item.answer && !item.answer.hidden && item.answer.value.trim();
         const checked = !item.checkedAnswer.hidden
           && (item.checkedAnswer.contains(event.target) || actions.contains(event.target));
@@ -656,7 +771,7 @@
       item.reviewPanel = element("section", "sentence-review");
       item.reviewPanel.setAttribute("aria-label", `第 ${number} 组表达评析`);
       item.reviewPanel.hidden = true;
-      card.append(actions, item.feedback, item.missing, item.reviewLink, item.reviewPanel);
+      item.content.append(actions, item.feedback, item.missing, item.reviewLink, item.reviewPanel);
       // Reference selection, checked results and action controls also identify
       // which group the learner last used, without moving keyboard focus.
       for (const name of ["focusin", "pointerup", "click"]) {
@@ -693,6 +808,7 @@
         return buildGroup(group, index, fragments);
       });
       $("sentenceGroups").replaceChildren(...items.map((item) => item.card));
+      buildProgressSegments();
       $("sentenceMeta").textContent = `${splitSentences(sourceText).length} 句 · ${items.length} 组 · 每组最多 ${groupSize} 句`;
       refreshSummary();
       if (focus) items[0]?.answer.focus({ preventScroll: true });
@@ -723,7 +839,14 @@
           item.answer.setSelectionRange(start, end, selectionDirection(group.selectionDirection));
           item.state.textContent = item.draft.length ? "待检查" : "待输入";
           if (group.checked === true) checkWords(item, { restore: true });
+          else if (group.reviewCompleted === true && item.draft.trim()) {
+            // Persist only the successful completion, never a stale AI result.
+            item.restoredReviewCompleted = true;
+            item.state.textContent = "表达正确";
+            item.card.classList.add("is-correct");
+          }
           showReference(item, group.referenceVisible !== false);
+          setCollapsed(item, group.collapsed === true, { restore: true });
         });
         activeGroup = Number.isSafeInteger(snapshot.activeGroup)
           ? Math.max(0, Math.min(items.length - 1, snapshot.activeGroup)) : 0;
@@ -754,6 +877,8 @@
     }));
     $("showAllReferences").addEventListener("click", () => items.forEach((item) => showReference(item, true)));
     $("hideAllReferences").addEventListener("click", () => items.forEach((item) => showReference(item, false)));
+    $("expandAllGroups").addEventListener("click", () => setAllCollapsed(false));
+    $("collapseAllGroups").addEventListener("click", () => setAllCollapsed(true));
     $("sentenceTimerStart").addEventListener("click", async () => {
       if (togglingTimer) return;
       if (clock.state === "running") { clock.pause(); refreshTimer(); return; }
@@ -773,7 +898,7 @@
       isComposing() { return items.some(item => item.composing); },
       getResumeTarget() {
         const item = items[activeGroup];
-        return item ? item.answer.hidden ? item.checkedAnswer : item.answer : null;
+        return item ? item.collapsed ? item.collapseButton : item.answer.hidden ? item.checkedAnswer : item.answer : null;
       },
       refreshTimer,
       refreshAccess() {
@@ -787,12 +912,12 @@
         if (!active) items.filter(item => item.reviewPending).forEach(item => edit(item, false));
       },
       getLearningSources() {
-        return items.filter(item => !item.reference.hidden).map(item => ({
+        return items.filter(item => !item.collapsed && !item.reference.hidden).map(item => ({
           display: item.reference,
           area: item.reference,
           getReferenceText: () => item.text,
           mapRange(start, end) {
-            if (!items.includes(item) || item.reference.hidden || !Number.isInteger(start)
+            if (!items.includes(item) || item.collapsed || item.reference.hidden || !Number.isInteger(start)
               || !Number.isInteger(end) || start < 0 || end <= start || end > item.text.length) return null;
             const mapOffset = offset => {
               const fragment = item.fragments.find(part => offset >= part.localStart && offset <= part.localEnd);

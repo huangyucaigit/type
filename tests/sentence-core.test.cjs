@@ -156,7 +156,7 @@ test('inserted words do not make following words incorrect', () => {
 test('missing words are reported separately without marking later words red', () => {
   const result = compareWords('I like green tea.', 'I like tea.');
   assert.ok(words(result).every(token => token.state === 'correct'));
-  assert.deepEqual(result.missing, [{ text: 'green', expectedIndex: 2 }]);
+  assert.deepEqual(result.missing, [{ text: 'green', expectedIndex: 2, actualOffset: 7 }]);
   assert.equal(result.errorCount, 1);
   assert.equal(result.completed, false);
 });
@@ -164,7 +164,7 @@ test('missing words are reported separately without marking later words red', ()
 test('aligns repeated words and prefers unchanged words for tied edit counts', () => {
   const missing = compareWords('we we like tea.', 'we like tea.');
   assert.equal(missing.correct, 3);
-  assert.deepEqual(missing.missing, [{ text: 'we', expectedIndex: 1 }]);
+  assert.deepEqual(missing.missing, [{ text: 'we', expectedIndex: 1, actualOffset: 3 }]);
   const extra = compareWords('we like tea.', 'we we like tea.');
   assert.equal(extra.correct, 3);
   assert.equal(extra.errorCount, 1);
@@ -178,7 +178,7 @@ test('handles multiple replacement, insertion and missing errors together', () =
   const result = compareWords('We like green tea and fresh fruit today.', 'We really like tea and fresh fruits today!');
   assert.equal(result.correct, 5);
   assert.equal(result.errorCount, 4);
-  assert.deepEqual(result.missing, [{ text: 'green', expectedIndex: 2 }]);
+  assert.deepEqual(result.missing, [{ text: 'green', expectedIndex: 2, actualOffset: 15 }]);
   assert.deepEqual(words(result).filter(token => token.state !== 'correct').map(token => [token.text, token.state, token.expected]), [
     ['really', 'extra', null], ['fruits', 'incorrect', 'fruit'], ['today!', 'incorrect', 'today.'],
   ]);
@@ -186,7 +186,7 @@ test('handles multiple replacement, insertion and missing errors together', () =
 
 test('handles empty input, whitespace input, extra-only input and blank sources', () => {
   assert.deepEqual(compareWords('One two.', ''), {
-    tokens: [], missing: [{ text: 'One', expectedIndex: 0 }, { text: 'two.', expectedIndex: 1 }],
+    tokens: [], missing: [{ text: 'One', expectedIndex: 0, actualOffset: 0 }, { text: 'two.', expectedIndex: 1, actualOffset: 0 }],
     correct: 0, errorCount: 2, completed: false,
   });
   assert.equal(compareWords('One two.', '\n\t ').errorCount, 2);
@@ -209,6 +209,59 @@ test('aligns larger groups with bounded-memory alignment and retains every input
   const result = compareWords(expected.join(' '), typed);
   assert.equal(result.errorCount, 4);
   assert.equal(result.correct, 117);
-  assert.deepEqual(result.missing, [{ text: 'word40', expectedIndex: 40 }]);
+  assert.deepEqual(result.missing, [{ text: 'word40', expectedIndex: 40, actualOffset: typed.indexOf('word41') }]);
   assert.equal(result.tokens.map(token => token.text).join(''), typed);
+});
+
+test('locates leading, consecutive and trailing omissions at exact input boundaries', () => {
+  const leading = compareWords('We all keep going.', '  keep going.\t');
+  assert.deepEqual(leading.missing, [
+    { text: 'We', expectedIndex: 0, actualOffset: 2 },
+    { text: 'all', expectedIndex: 1, actualOffset: 2 },
+  ]);
+  const middle = compareWords('We like fresh green tea.', 'We like\t\r\n  tea.');
+  assert.deepEqual(middle.missing, [
+    { text: 'fresh', expectedIndex: 2, actualOffset: 12 },
+    { text: 'green', expectedIndex: 3, actualOffset: 12 },
+  ]);
+  const trailing = compareWords('We keep going every day.', '\tWe keep going\r\n  ');
+  assert.deepEqual(trailing.missing, [
+    { text: 'every', expectedIndex: 3, actualOffset: 14 },
+    { text: 'day.', expectedIndex: 4, actualOffset: 14 },
+  ]);
+  for (const result of [leading, middle, trailing]) {
+    assert.ok(result.missing.every((item, index, omissions) => index === 0 || item.actualOffset >= omissions[index - 1].actualOffset));
+  }
+});
+
+test('empty and whitespace-only drafts put every omission at zero', () => {
+  for (const actual of ['', '\r\n\t  ', undefined]) {
+    assert.deepEqual(compareWords('We keep going.', actual).missing, [
+      { text: 'We', expectedIndex: 0, actualOffset: 0 },
+      { text: 'keep', expectedIndex: 1, actualOffset: 0 },
+      { text: 'going.', expectedIndex: 2, actualOffset: 0 },
+    ]);
+  }
+});
+
+test('omission offsets use UTF-16 and preserve punctuation and raw draft spacing', () => {
+  const actual = '\t😀 We\r\n  keep\tgoing.  ';
+  const result = compareWords('😀 We always keep going. Today.', actual);
+  assert.deepEqual(result.missing, [
+    { text: 'always', expectedIndex: 2, actualOffset: actual.indexOf('keep') },
+    { text: 'Today.', expectedIndex: 5, actualOffset: actual.indexOf('going.') + 'going.'.length },
+  ]);
+  assert.equal(result.tokens.map(token => token.text).join(''), actual);
+  assert.ok(words(result).every(token => token.state === 'correct'));
+});
+
+test('repeated words retain their own aligned insertion boundaries', () => {
+  const actual = 'go\tgo\nend';
+  const result = compareWords('go go go end again', actual);
+  assert.deepEqual(result.missing, [
+    { text: 'go', expectedIndex: 2, actualOffset: actual.indexOf('end') },
+    { text: 'again', expectedIndex: 4, actualOffset: actual.length },
+  ]);
+  assert.equal(result.correct, 3);
+  assert.equal(result.errorCount, 2);
 });

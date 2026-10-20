@@ -263,3 +263,64 @@ test('progress save and clear are atomic on storage failures and reread other ta
   assert.equal(f.value(), before);
   assert.deepEqual(f.makeStore().read().articles[0].progress, progress());
 });
+
+test('group collapse and review completion flags persist independently for sample and imported articles without shared references', () => {
+  const f = fixture();
+  const article = f.store.importArticle('One.', 'One');
+  const sample = progress({ mode: 'sentence' });
+  const imported = progress({ mode: 'sentence' });
+  Object.assign(sample.sentence.groups[0], { collapsed: true, reviewCompleted: false });
+  Object.assign(imported.sentence.groups[0], { collapsed: false, reviewCompleted: true });
+  const written = f.store.saveProgress(article.id, imported);
+  f.store.saveProgress(null, sample);
+  imported.sentence.groups[0].collapsed = true;
+  imported.sentence.groups[0].reviewCompleted = false;
+  written.articles[0].progress.sentence.groups[0].reviewCompleted = false;
+  sample.sentence.groups[0].collapsed = false;
+  const read = f.makeStore().read();
+  assert.equal(read.sampleProgress.sentence.groups[0].collapsed, true);
+  assert.equal(read.sampleProgress.sentence.groups[0].reviewCompleted, false);
+  assert.equal(read.articles[0].progress.sentence.groups[0].collapsed, false);
+  assert.equal(read.articles[0].progress.sentence.groups[0].reviewCompleted, true);
+  read.sampleProgress.sentence.groups[0].reviewCompleted = true;
+  read.articles[0].progress.sentence.groups[0].collapsed = true;
+  assert.equal(f.store.read().sampleProgress.sentence.groups[0].reviewCompleted, false);
+  assert.equal(f.store.select(article.id).progress.sentence.groups[0].collapsed, false);
+  assert.equal(f.store.importArticle('  One. ', 'Duplicate').progress.sentence.groups[0].reviewCompleted, true);
+  assert.equal('collapsed' in read.articles[0].progress.sentence.groups[1], false);
+  assert.equal('reviewCompleted' in read.articles[0].progress.sentence.groups[1], false);
+});
+
+test('group collapse and review completion accept only booleans and ignore malformed optional values on read and save', () => {
+  for (const invalid of [undefined, null, 0, 1, '', 'false', 'true', {}, []]) {
+    const snapshot = progress({ mode: 'sentence' });
+    Object.assign(snapshot.sentence.groups[0], { collapsed: invalid, reviewCompleted: invalid });
+    const original = JSON.stringify({ version: 1, articles: [{ id: 'one', text: 'One.', title: 'One', progress: snapshot }],
+      currentId: 'one', sampleProgress: snapshot });
+    const f = fixture(original);
+    const read = f.store.read();
+    assert.deepEqual(read.articles[0].progress, progress({ mode: 'sentence' }));
+    assert.deepEqual(read.sampleProgress, progress({ mode: 'sentence' }));
+    assert.equal(f.value(), original);
+    f.store.saveProgress('one', snapshot);
+    assert.deepEqual(f.makeStore().read().articles[0].progress, progress({ mode: 'sentence' }));
+  }
+});
+
+test('group display flags follow article deletion and FIFO eviction while retained sample flags survive', () => {
+  const f = fixture();
+  const snapshot = progress({ mode: 'sentence' });
+  Object.assign(snapshot.sentence.groups[0], { collapsed: true, reviewCompleted: true });
+  f.store.saveProgress(null, snapshot);
+  const deleted = f.store.importArticle('Delete me.', 'Delete');
+  f.store.saveProgress(deleted.id, snapshot);
+  f.store.remove(deleted.id);
+  assert.equal(f.store.saveProgress(deleted.id, snapshot), null);
+  assert.equal('progress' in f.store.importArticle('Delete me.', 'New article'), false);
+  const evicted = f.store.importArticle('Oldest retained.', 'Oldest');
+  f.store.saveProgress(evicted.id, snapshot);
+  for (let i = 0; i < 10; i++) f.store.importArticle(`Later article ${i}.`, `Later ${i}`);
+  assert.equal(f.store.read().articles.some(article => article.id === evicted.id), false);
+  assert.equal(f.store.saveProgress(evicted.id, snapshot), null);
+  assert.deepEqual(f.makeStore().read().sampleProgress, snapshot);
+});

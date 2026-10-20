@@ -120,6 +120,7 @@ function createPage({ source = 'First sentence. Second sentence! Third sentence?
     removeAttribute(name) { this.attributes.delete(name); }
     setSelectionRange(start, end, direction = 'none') { this.selectionStart = start; this.selectionEnd = end; this.selectionDirection = direction; }
     focus() { document.activeElement = this; }
+    scrollIntoView(options) { this.lastScrollIntoView = options; }
     showModal() { this.open = true; }
     close() { this.open = false; this.emit('close'); }
     contains(node) { return node === this || this.childNodes.some(child => child === node || child.contains?.(node)); }
@@ -210,6 +211,8 @@ function createPage({ source = 'First sentence. Second sentence! Third sentence?
     const one = className => find(card, className)[0];
     return {
       card,
+      content: one('group-content'),
+      collapse: one('group-collapse'),
       reference: one('sentence-reference'),
       placeholder: one('reference-placeholder'),
       toggle: one('reference-toggle'),
@@ -422,16 +425,199 @@ test('case and punctuation mismatches are visible at word level after checking',
   assert.equal(page.group(0).card.classList.contains('is-correct'), false);
 });
 
-test('missing words are listed without making later correct words red', async () => {
+test('missing words are marked inline and listed without making later correct words red', async () => {
   const page = createPage({ source: 'We learn English every day.' });
   await page.type(0, 'We English every day.');
   await page.click(page.group(0).check);
   const group = page.group(0);
   assert.equal(group.missing.hidden, false);
   assert.deepEqual(page.find(group.missing, 'missing-word').map(node => node.textContent), ['learn']);
+  assert.deepEqual(page.find(group.checked, 'word-missing-text').map(node => node.textContent), ['learn']);
+  assert.match(group.missing.textContent, /已在文中标出.*点击定位修改/);
   assert.equal(page.find(group.checked, 'word-error').length, 0);
   assert.equal(page.find(group.checked, 'word-extra').length, 0);
   assert.match(group.feedback.textContent, /漏词 1/);
+});
+
+function checkedDraftWithMarkers(page, checked) {
+  return checked.children.map(node => node.classList.contains('word-missing')
+    ? `|${page.find(node, 'word-missing-text')[0]?.textContent}|` : node.textContent).join('');
+}
+
+test('inline omissions appear at the exact start, middle, end and consecutive word boundaries', async () => {
+  const source = 'We learn English every day.';
+  const examples = [
+    { draft: 'learn English every day.', displayed: '|We|learn English every day.', words: ['We'] },
+    { draft: 'We English every day.', displayed: 'We |learn|English every day.', words: ['learn'] },
+    { draft: 'We learn English every', displayed: 'We learn English every|day.|', words: ['day.'] },
+    { draft: 'We every day.', displayed: 'We |learn||English|every day.', words: ['learn', 'English'] },
+  ];
+  for (const { draft, displayed, words } of examples) {
+    const page = createPage({ source });
+    await page.type(0, draft);
+    await page.click(page.group(0).check);
+    const group = page.group(0);
+    const markers = page.find(group.checked, 'word-missing');
+    assert.equal(checkedDraftWithMarkers(page, group.checked), displayed, draft);
+    assert.deepEqual(page.find(group.checked, 'word-missing-text').map(node => node.textContent), words, draft);
+    assert.deepEqual(markers.map(node => node.textContent), words, draft);
+    assert.equal(group.answer.value, draft, draft);
+    assert.equal(page.find(group.checked, 'word-error').length, 0, draft);
+    for (const marker of markers) {
+      assert.equal(marker.tagName, 'BUTTON');
+      assert.equal(marker.type, 'button');
+      assert.equal(marker.classList.contains('word-error'), false);
+      assert.match(marker.title, /漏/);
+      assert.match(marker.getAttribute('aria-label'), /漏/);
+      assert.match(marker.getAttribute('aria-label'), /定位|修改/);
+    }
+  }
+});
+
+test('inline omissions preserve every original space and line break while wrong and extra words stay distinct', async () => {
+  const draft = ' \tWe \nreally  learn French \n day.  ';
+  const page = createPage({ source: 'We learn English every day.' });
+  await page.type(0, draft);
+  await page.click(page.group(0).check);
+  const group = page.group(0);
+  const boundary = draft.indexOf('day.');
+  assert.equal(checkedDraftWithMarkers(page, group.checked), draft.slice(0, boundary) + '|every|' + draft.slice(boundary));
+  assert.equal(group.checked.children.filter(node => !node.classList.contains('word-missing')).map(node => node.textContent).join(''), draft);
+  assert.deepEqual(page.find(group.checked, 'word-error').map(node => node.textContent), ['French']);
+  assert.deepEqual(page.find(group.checked, 'word-extra').map(node => node.textContent), ['really']);
+  assert.deepEqual(page.find(group.checked, 'word-missing-text').map(node => node.textContent), ['every']);
+  assert.match(group.feedback.textContent, /错词 1.*多词 1.*漏词 1/);
+  assert.equal(group.answer.value, draft);
+});
+
+test('clicking inline and summary omission buttons returns to the precise editable boundary without adding an answer or calling AI', async () => {
+  const examples = [
+    { source: 'We learn English every day.', draft: 'learn English every day.', offset: 0 },
+    { source: 'We learn English every day.', draft: 'We English every day.', offset: 3 },
+    { source: 'We learn English every day.', draft: 'We learn English every  ', offset: 22 },
+    { source: 'We learn English every day.', draft: 'We every day.', offset: 3 },
+    { source: 'We 😀 learn English every day.', draft: 'We 😀 English every day.', offset: 6 },
+  ];
+  for (const { source, draft, offset } of examples) {
+    for (const location of ['inline', 'summary']) {
+      let requests = 0;
+      const page = createPage({ source, fetch: async () => { requests++; throw new Error('omission navigation must remain local'); } });
+      await page.type(0, draft);
+      await page.click(page.group(0).check);
+      const group = page.group(0);
+      const marker = page.find(location === 'inline' ? group.checked : group.missing, location === 'inline' ? 'word-missing' : 'missing-word')[0];
+      assert.equal(marker.tagName, 'BUTTON', location);
+      assert.equal(marker.type, 'button', location);
+      // The child target follows normal click bubbling from the visible word.
+      await page.click(location === 'inline' ? page.find(marker, 'word-missing-text')[0] : marker);
+      assert.equal(group.answer.hidden, false, `${location}: ${draft}`);
+      assert.equal(group.checked.hidden, true, `${location}: ${draft}`);
+      assert.equal(group.missing.hidden, true, `${location}: ${draft}`);
+      assert.equal(group.answer.value, draft, `${location}: ${draft}`);
+      assert.equal(group.answer.selectionStart, offset, `${location}: ${draft}`);
+      assert.equal(group.answer.selectionEnd, offset, `${location}: ${draft}`);
+      assert.equal(page.document.activeElement, group.answer, `${location}: ${draft}`);
+      assert.equal(group.feedback.textContent, '', `${location}: ${draft}`);
+      assert.equal(requests, 0, `${location}: ${draft}`);
+      assert.equal(page.controller.getProgress().groups[0].selectionStart, offset, `${location}: ${draft}`);
+    }
+  }
+});
+
+test('omission buttons navigate locally without changing another group or a running stopwatch', async () => {
+  const page = createPage({ source: 'We learn English. Keep learning.' });
+  await page.type(0, 'We English.');
+  await page.type(1, 'Keep wrong.');
+  await page.click(page.group(1).check);
+  await page.fire('sentenceTimerStart', 'click');
+  page.tick(2100);
+  await page.click(page.group(0).check);
+  await page.click(page.find(page.group(0).checked, 'word-missing')[0]);
+  assert.equal(page.group(0).answer.selectionStart, 3);
+  assert.equal(page.group(1).answer.value, 'Keep wrong.');
+  assert.equal(page.group(1).checked.hidden, false);
+  assert.deepEqual(page.find(page.group(1).checked, 'word-error').map(node => node.textContent), ['wrong.']);
+  page.tick(2300);
+  assert.equal(page.$('sentenceTimerValue').textContent, '00:04');
+  assert.equal(page.$('sentenceTimerState').textContent, '计时中');
+});
+
+test('saved strict results recompute inline omission positions without AI, authorization or moving focus', async () => {
+  const source = 'We 😀 learn English every day.';
+  const original = createPage({ source });
+  await original.type(0, 'We 😀 English every day.');
+  await original.click(original.group(0).check);
+  const snapshot = original.controller.getProgress();
+  let requests = 0, authorizations = 0;
+  const restored = createPage({ source,
+    fetch: async () => { requests++; throw new Error('restore must remain local'); },
+    auth: { canPractice: () => false, requireAccess: () => { authorizations++; return false; } },
+  });
+  assert.equal(restored.controller.restoreProgress(snapshot), true);
+  const group = restored.group(0);
+  assert.equal(checkedDraftWithMarkers(restored, group.checked), 'We 😀 |learn|English every day.');
+  assert.equal(group.answer.value, 'We 😀 English every day.');
+  assert.equal(group.checked.hidden, false);
+  assert.equal(group.answer.readOnly, true);
+  assert.equal(restored.document.activeElement, null);
+  assert.equal(requests, 0);
+  assert.equal(authorizations, 0);
+});
+
+test('stale omission buttons cannot edit a new result, inactive mode, changed grouping or replacement source', async () => {
+  const actions = [
+    async page => { await page.click(page.group(0).edit); await page.type(0, 'We English.'); await page.click(page.group(0).check); },
+    async page => { page.controller.setActive(false); },
+    async page => { await page.size(2); },
+    async page => { page.controller.setSource('New article. Another example.', 'New', '我的范文'); },
+    async page => { page.controller.reset(); },
+  ];
+  for (const action of actions) {
+    for (const className of ['word-missing', 'missing-word']) {
+      const page = createPage({ source: 'We learn English. Keep learning.' });
+      await page.type(0, 'We English.');
+      await page.click(page.group(0).check);
+      const old = page.group(0);
+      const marker = page.find(className === 'word-missing' ? old.checked : old.missing, className)[0];
+      await action(page);
+      page.group(0).answer.setSelectionRange(1, 1);
+      const before = JSON.stringify(page.controller.getProgress());
+      const focusBefore = page.document.activeElement;
+      await page.click(marker);
+      assert.equal(JSON.stringify(page.controller.getProgress()), before, className);
+      assert.equal(page.document.activeElement, focusBefore, className);
+    }
+  }
+});
+
+test('expired access prevents omission buttons from exposing the answer, changing its caret or stealing focus', async () => {
+  for (const className of ['word-missing', 'missing-word']) {
+    let allowed = true, authorizations = 0;
+    const page = createPage({ source: 'We learn English.', auth: {
+      canPractice: () => allowed,
+      requireAccess: () => { authorizations++; return allowed; },
+    } });
+    await page.type(0, 'We English.');
+    await page.click(page.group(0).check);
+    const group = page.group(0);
+    const marker = page.find(className === 'word-missing' ? group.checked : group.missing, className)[0];
+    group.answer.setSelectionRange(1, 2, 'backward');
+    allowed = false;
+    page.controller.refreshAccess();
+    const focusBefore = page.document.activeElement;
+    const before = JSON.stringify(page.controller.getProgress());
+    await page.click(marker);
+    assert.equal(group.answer.readOnly, true);
+    assert.equal(group.answer.hidden, true);
+    assert.equal(group.checked.hidden, false);
+    assert.equal(group.answer.value, 'We English.');
+    assert.equal(group.answer.selectionStart, 1);
+    assert.equal(group.answer.selectionEnd, 2);
+    assert.equal(group.answer.selectionDirection, 'backward');
+    assert.equal(page.document.activeElement, focusBefore);
+    assert.equal(JSON.stringify(page.controller.getProgress()), before);
+    assert.equal(authorizations, 1);
+  }
 });
 
 test('extra words are red without making later correct words red', async () => {
@@ -450,11 +636,19 @@ test('checking an empty answer shows an explicit prompt and all omitted words', 
   await page.click(page.group(0).check);
   const group = page.group(0);
   assert.match(group.checked.textContent, /尚未输入/);
+  assert.equal(page.find(group.checked, 'word-missing').length, 0);
   assert.deepEqual(page.find(group.missing, 'missing-word').map(node => node.textContent), ['Keep', 'learning.']);
   assert.equal(group.reference.hidden, false);
   assert.match(page.$('sentenceProgress').textContent, /0 \/ 1/);
   page.tick(5000);
   assert.equal(page.$('sentenceTimerValue').textContent, '00:00');
+  const omitted = page.find(group.missing, 'missing-word')[1];
+  assert.equal(omitted.tagName, 'BUTTON');
+  await page.click(omitted);
+  assert.equal(group.answer.hidden, false);
+  assert.equal(group.answer.value, '');
+  assert.equal(group.answer.selectionStart, 0);
+  assert.equal(group.answer.selectionEnd, 0);
 });
 
 test('editing keeps the draft, removes stale visible feedback and supports rechecking', async () => {
@@ -2255,7 +2449,7 @@ test('restored strict results remain complete and point resume to checked conten
   const next = createPage();
   assert.equal(next.controller.restoreProgress(original.controller.getProgress()), true);
   assert.equal(next.group(1).card.classList.contains('is-correct'), true);
-  assert.equal(next.$('sentenceProgress').textContent, '正确完成 1 / 3 组');
+  assert.equal(next.$('sentenceProgress').textContent, '已完成 1 / 3 组');
   assert.equal(next.controller.getResumeTarget(), next.group(1).checked);
   assert.equal(next.document.activeElement, null);
 });
@@ -2422,4 +2616,370 @@ test('sentence restore shares the aggregate million-character limit and permits 
     { draft: 'a'.repeat(500000) }, { draft: 'b'.repeat(500001) },
   ] }), false);
   assert.equal(page.controller.getProgress().groups[1].draft.length, 500000);
+});
+
+test('every group starts expanded with an accessible collapse control and one numbered progress segment', () => {
+  const page = createPage();
+  const segments = page.$('sentenceProgressSegments').children;
+  assert.equal(segments.length, 3);
+  page.groups().forEach((card, index) => {
+    const group = page.group(index);
+    assert.equal(group.content.hidden, false);
+    assert.equal(group.content.contains(group.answer), true);
+    assert.equal(group.content.contains(group.reference), true);
+    assert.equal(group.content.contains(group.reviewPanel), true);
+    assert.equal(group.content.contains(group.state), false);
+    assert.equal(group.content.contains(group.collapse), false);
+    assert.equal(group.collapse.getAttribute('aria-expanded'), 'true');
+    assert.equal(group.collapse.getAttribute('aria-controls'), group.content.id);
+    assert.equal(group.collapse.getAttribute('aria-label'), `收起第 ${index + 1} 组`);
+    assert.equal(segments[index].textContent, String(index + 1));
+    assert.equal(segments[index].classList.contains('is-complete'), false);
+    assert.match(segments[index].getAttribute('aria-label'), /未完成/);
+  });
+  assert.equal(page.$('sentenceProgress').textContent, '已完成 0 / 3 组');
+});
+
+test('folding hides the entire body and keeps the draft, checked result, reference choice and manual timer', async () => {
+  const page = createPage();
+  const group = page.group(0);
+  await page.fire('sentenceTimerStart', 'click');
+  await page.type(0, 'First typo.');
+  await page.click(group.check);
+  await page.click(group.toggle);
+  const result = group.checked.textContent;
+  page.tick(2300);
+  await page.click(group.collapse);
+  assert.equal(group.content.hidden, true);
+  assert.equal(group.card.classList.contains('is-collapsed'), true);
+  assert.equal(group.collapse.textContent, '展开');
+  assert.equal(group.collapse.getAttribute('aria-expanded'), 'false');
+  assert.equal(group.collapse.getAttribute('aria-label'), '展开第 1 组');
+  assert.equal(group.answer.value, 'First typo.');
+  assert.equal(group.reference.hidden, true);
+  assert.equal(group.checked.hidden, false);
+  assert.equal(group.checked.textContent, result);
+  assert.equal(page.$('sentenceTimerState').textContent, '计时中');
+  page.tick(1100);
+  await page.click(group.collapse);
+  assert.equal(group.content.hidden, false);
+  assert.equal(group.card.classList.contains('is-collapsed'), false);
+  assert.equal(group.checked.textContent, result);
+  assert.equal(group.reference.hidden, true);
+  assert.equal(page.$('sentenceTimerValue').textContent, '00:03');
+});
+
+test('collapsing a focused body moves focus to its header and expanding never focuses an input', async () => {
+  const page = createPage();
+  const group = page.group(1);
+  group.answer.focus();
+  await page.fire('collapseAllGroups', 'click');
+  assert.equal(page.document.activeElement, group.collapse);
+  page.groups().forEach((card, index) => assert.equal(page.group(index).content.hidden, true));
+  await page.fire('expandAllGroups', 'click');
+  assert.equal(page.document.activeElement, group.collapse);
+  page.groups().forEach((card, index) => assert.equal(page.group(index).content.hidden, false));
+  assert.equal(page.$('sentenceProgress').textContent, '已完成 0 / 3 组');
+});
+
+test('individual and bulk folding remain independent of showing or hiding references', async () => {
+  const page = createPage();
+  await page.click(page.group(0).toggle);
+  await page.fire('collapseAllGroups', 'click');
+  await page.fire('showAllReferences', 'click');
+  page.groups().forEach((card, index) => {
+    assert.equal(page.group(index).content.hidden, true);
+    assert.equal(page.group(index).reference.hidden, false);
+  });
+  await page.fire('hideAllReferences', 'click');
+  await page.click(page.group(1).collapse);
+  assert.equal(page.group(1).content.hidden, false);
+  assert.equal(page.group(1).reference.hidden, true);
+  assert.equal(page.group(0).content.hidden, true);
+  await page.fire('expandAllGroups', 'click');
+  page.groups().forEach((card, index) => assert.equal(page.group(index).reference.hidden, true));
+});
+
+test('progress counts only correct checks and keeps stable segment controls during typing and edits', async () => {
+  const page = createPage();
+  const segments = [...page.$('sentenceProgressSegments').children];
+  await page.type(0, 'First sentence.');
+  assert.equal(segments[0].classList.contains('is-complete'), false);
+  await page.click(page.group(0).check);
+  assert.equal(segments[0].classList.contains('is-complete'), true);
+  assert.match(segments[0].getAttribute('aria-label'), /已完成/);
+  assert.equal(page.$('sentenceProgress').textContent, '已完成 1 / 3 组');
+  await page.type(1, 'Wrong sentence!');
+  await page.click(page.group(1).check);
+  assert.equal(segments[1].classList.contains('is-complete'), false);
+  assert.equal(page.$('sentenceProgress').textContent, '已完成 1 / 3 组');
+  assert.doesNotMatch(page.$('sentenceSessionStatus').textContent, /\d.*\//);
+  await page.click(page.group(0).collapse);
+  assert.equal(segments[0].classList.contains('is-complete'), true);
+  await page.click(page.group(0).collapse);
+  await page.click(page.group(0).edit);
+  assert.equal(segments[0].classList.contains('is-complete'), false);
+  assert.deepEqual(page.$('sentenceProgressSegments').children, segments);
+});
+
+test('clicking a progress segment expands and scrolls to its group without invoking AI or a keyboard', async () => {
+  let requests = 0;
+  const page = createPage({ fetch: async () => { requests++; throw new Error('navigation is local'); } });
+  await page.type(1, 'Second draft');
+  await page.fire('collapseAllGroups', 'click');
+  const group = page.group(1);
+  await page.click(page.$('sentenceProgressSegments').children[1]);
+  assert.equal(group.content.hidden, false);
+  assert.equal(page.group(0).content.hidden, true);
+  assert.equal(page.group(2).content.hidden, true);
+  assert.equal(group.answer.value, 'Second draft');
+  assert.equal(page.document.activeElement, group.collapse);
+  assert.equal(group.card.lastScrollIntoView.block, 'start');
+  assert.equal(page.controller.getProgress().activeGroup, 1);
+  assert.equal(requests, 0);
+});
+
+test('folding and progress navigation need no trial access or authorization and stale controls do nothing', async () => {
+  let authorizations = 0;
+  const page = createPage({ auth: {
+    canPractice: () => false,
+    requireAccess: () => { authorizations++; return false; },
+  } });
+  const old = page.group(1);
+  const oldSegment = page.$('sentenceProgressSegments').children[1];
+  await page.fire('collapseAllGroups', 'click');
+  await page.click(oldSegment);
+  assert.equal(old.content.hidden, false);
+  assert.equal(page.document.activeElement, old.collapse);
+  assert.equal(authorizations, 0);
+  page.controller.setSource('New sentence.', 'New essay', '我的范文');
+  const state = JSON.stringify(page.controller.getProgress());
+  page.document.activeElement = null;
+  await page.click(old.collapse);
+  await page.click(oldSegment);
+  assert.equal(JSON.stringify(page.controller.getProgress()), state);
+  assert.equal(page.document.activeElement, null);
+  assert.equal(authorizations, 0);
+});
+
+test('folded bodies cannot trigger word-check or review shortcuts and are absent from learning sources', async () => {
+  let requests = 0;
+  const page = createPage({ fetch: async () => { requests++; return reviewed('First sentence.'); } });
+  const source = page.controller.getLearningSources()[0];
+  await page.type(0, 'First sentence.');
+  await page.click(page.group(0).collapse);
+  assert.equal(page.controller.getLearningSources().length, 2);
+  assert.equal(source.mapRange(0, 5), null);
+  assert.equal(await page.key(page.group(0).answer, { ctrlKey: true }), false);
+  assert.equal(await page.key(page.group(0).answer, { ctrlKey: true, shiftKey: true }), false);
+  await page.click(page.group(0).check);
+  await page.click(page.group(0).review);
+  assert.equal(page.group(0).checked.hidden, true);
+  assert.equal(requests, 0);
+  await page.click(page.group(0).collapse);
+  assert.equal(page.controller.getLearningSources().length, 3);
+});
+
+test('folded progress restores exactly without focus or requests and older snapshots default to expanded', async () => {
+  const page = createPage();
+  await page.type(1, 'Second sentence!');
+  await page.click(page.group(1).check);
+  await page.click(page.group(1).collapse);
+  const saved = JSON.parse(JSON.stringify(page.controller.getProgress()));
+  let calls = 0;
+  const next = createPage({ fetch: async () => { calls++; throw new Error('no restore request'); } });
+  assert.equal(next.controller.restoreProgress(saved), true);
+  assert.equal(next.group(1).content.hidden, true);
+  assert.equal(next.group(1).checked.hidden, false);
+  assert.equal(next.$('sentenceProgressSegments').children[1].classList.contains('is-complete'), true);
+  assert.equal(next.controller.getResumeTarget(), next.group(1).collapse);
+  assert.equal(next.document.activeElement, null);
+  assert.deepEqual(JSON.parse(JSON.stringify(next.controller.getProgress())), saved);
+  assert.equal(calls, 0);
+  saved.groups.forEach(group => { delete group.collapsed; });
+  assert.equal(next.controller.restoreProgress(saved), true);
+  next.groups().forEach((card, index) => assert.equal(next.group(index).content.hidden, false));
+});
+
+test('a folded saved textarea retains deferred internal scroll until expanded', async () => {
+  const page = createPage();
+  await page.type(0, 'Long draft\n'.repeat(30));
+  page.group(0).answer.scrollTop = 321;
+  await page.click(page.group(0).collapse);
+  const next = createPage();
+  assert.equal(next.controller.restoreProgress(page.controller.getProgress()), true);
+  next.tick(1);
+  assert.equal(next.controller.getProgress().groups[0].scrollTop, 321);
+  assert.notEqual(next.group(0).answer.scrollTop, 321);
+  await next.click(next.group(0).collapse);
+  assert.equal(next.group(0).answer.scrollTop, 321);
+});
+
+test('successful AI completion survives reload without AI content and clears when editing the draft', async () => {
+  const answer = 'English is something we study daily.';
+  const page = createPage({ source: 'We learn English every day.', fetch: async () => reviewed(answer) });
+  await page.type(0, answer);
+  await page.click(page.group(0).review);
+  assert.equal(page.$('sentenceProgress').textContent, '已完成 1 / 1 组');
+  await page.click(page.group(0).collapse);
+  const saved = JSON.parse(JSON.stringify(page.controller.getProgress()));
+  assert.equal(saved.groups[0].reviewCompleted, true);
+  assert.equal(saved.groups[0].checked, false);
+  assert.equal(saved.groups[0].review, undefined);
+  let calls = 0;
+  const next = createPage({ source: 'We learn English every day.', fetch: async () => { calls++; throw new Error('no restore AI'); } });
+  assert.equal(next.controller.restoreProgress(saved), true);
+  assert.equal(next.$('sentenceProgress').textContent, '已完成 1 / 1 组');
+  assert.equal(next.$('sentenceProgressSegments').children[0].classList.contains('is-complete'), true);
+  assert.equal(next.group(0).state.textContent, '表达正确');
+  assert.equal(next.group(0).reviewPanel.hidden, true);
+  assert.equal(next.group(0).answer.hidden, false);
+  assert.equal(next.group(0).answer.value, answer);
+  assert.equal(next.document.activeElement, null);
+  await next.click(next.group(0).collapse);
+  await next.type(0, `${answer} Revised.`);
+  assert.equal(next.controller.getProgress().groups[0].reviewCompleted, undefined);
+  assert.equal(next.group(0).card.classList.contains('is-correct'), false);
+  assert.equal(next.$('sentenceProgress').textContent, '已完成 0 / 1 组');
+  assert.equal(calls, 0);
+});
+
+test('AI uncertainty or meaning changes never turn a progress segment green or persist completed metadata', async () => {
+  for (const options of [
+    { meaningStatus: 'changed', meaningNotes: ['原意不同。'] },
+    { meaningStatus: 'uncertain', meaningNotes: ['原意尚需确认。'] },
+    { languageStatus: 'uncertain' },
+  ]) {
+    const page = createPage({ source: 'We learn English every day.', fetch: async () => reviewed('We study it daily.', options) });
+    await page.type(0, 'We study it daily.');
+    await page.click(page.group(0).review);
+    assert.equal(page.$('sentenceProgressSegments').children[0].classList.contains('is-complete'), false);
+    assert.equal(page.controller.getProgress().groups[0].reviewCompleted, undefined);
+    const next = createPage({ source: 'We learn English every day.' });
+    assert.equal(next.controller.restoreProgress(page.controller.getProgress()), true);
+    assert.equal(next.$('sentenceProgress').textContent, '已完成 0 / 1 组');
+  }
+});
+
+test('folding an in-flight review preserves the request and late results never steal hidden focus', async () => {
+  const pending = deferred();
+  let requests = 0;
+  const page = createPage({ fetch: async () => { requests++; return pending.promise; } });
+  const group = page.group(0);
+  await page.type(0, 'First sentence.');
+  group.review.focus();
+  const work = page.click(group.review);
+  await Promise.resolve();
+  assert.equal(group.review.disabled, true);
+  assert.equal(page.document.activeElement, group.answer);
+  await page.fire('collapseAllGroups', 'click');
+  assert.equal(page.document.activeElement, group.collapse);
+  assert.equal(group.review.textContent, '评析中…');
+  pending.resolve(reviewed('First sentence.'));
+  await work;
+  assert.equal(group.content.hidden, true);
+  assert.equal(group.review.disabled, false);
+  assert.equal(group.reviewPanel.hidden, false);
+  assert.equal(page.document.activeElement, group.collapse);
+  assert.equal(page.$('sentenceProgressSegments').children[0].classList.contains('is-complete'), true);
+  await page.click(group.collapse);
+  assert.equal(group.reviewPanel.hidden, false);
+  assert.equal(page.document.activeElement, group.collapse);
+  assert.equal(requests, 1);
+});
+
+test('reset, regroup and source changes rebuild expanded groups and fresh gray progress controls', async () => {
+  for (const action of [page => page.controller.reset(), page => page.size(2),
+    page => page.controller.setSource('New article. A second sentence.', 'Next', '我的范文')]) {
+    const page = createPage();
+    await page.type(0, 'First sentence.');
+    await page.click(page.group(0).check);
+    await page.fire('collapseAllGroups', 'click');
+    await action(page);
+    page.groups().forEach((card, index) => {
+      assert.equal(page.group(index).content.hidden, false);
+      assert.equal(page.group(index).answer.value, '');
+      assert.equal(page.$('sentenceProgressSegments').children[index].classList.contains('is-complete'), false);
+    });
+    assert.equal(page.controller.getProgress().groups.every(group => !group.collapsed && !group.reviewCompleted), true);
+    assert.match(page.$('sentenceProgress').textContent, /^已完成 0 \//);
+  }
+});
+
+test('folding during composition preserves the final draft and publishes its collapse state when composition ends', async () => {
+  const changes = [];
+  const page = createPage({ onProgressChange: value => changes.push(value) });
+  const group = page.group(0);
+  await group.answer.emit('compositionstart');
+  group.answer.value = '中';
+  await group.answer.emit('input', { isComposing: true });
+  await page.click(group.collapse);
+  assert.equal(changes.length, 0);
+  group.answer.value = '中文';
+  await group.answer.emit('compositionend');
+  assert.equal(changes.at(-1).groups[0].draft, '中文');
+  assert.equal(changes.at(-1).groups[0].collapsed, true);
+  assert.equal(group.content.hidden, true);
+});
+
+test('bulk folding publishes one complete snapshot and one learning reset, including focus migration', async () => {
+  const changes = [];
+  let resets = 0;
+  const page = createPage({
+    onProgressChange: snapshot => changes.push(snapshot),
+    onLearningReset: () => { resets++; },
+  });
+  const focused = page.group(2);
+  focused.answer.focus();
+  // Real browsers emit focusin synchronously when a hidden body gives its
+  // keyboard focus back to the header. Include that in the notification count.
+  focused.collapse.focus = () => {
+    page.document.activeElement = focused.collapse;
+    void focused.collapse.emit('focusin');
+  };
+  changes.length = 0;
+  resets = 0;
+  await page.fire('collapseAllGroups', 'click');
+  assert.equal(changes.length, 1);
+  assert.equal(resets, 1);
+  assert.equal(changes[0].groups.every(group => group.collapsed), true);
+  assert.equal(changes[0].activeGroup, 2);
+  assert.equal(page.document.activeElement, focused.collapse);
+  await page.fire('collapseAllGroups', 'click');
+  assert.equal(changes.length, 1);
+  assert.equal(resets, 1);
+  await page.fire('expandAllGroups', 'click');
+  assert.equal(changes.length, 2);
+  assert.equal(resets, 2);
+  assert.equal(changes[1].groups.every(group => !group.collapsed), true);
+  assert.equal(page.document.activeElement, focused.collapse);
+  await page.fire('expandAllGroups', 'click');
+  assert.equal(changes.length, 2);
+  assert.equal(resets, 2);
+});
+
+test('unchanged progress states do not rewrite segment labels or classes during typing', async () => {
+  const page = createPage();
+  const segments = [...page.$('sentenceProgressSegments').children];
+  const writes = [];
+  segments.forEach((segment, index) => {
+    const attribute = segment.setAttribute.bind(segment);
+    const toggle = segment.classList.toggle.bind(segment.classList);
+    segment.setAttribute = (name, value) => { writes.push([index, name, value]); attribute(name, value); };
+    segment.classList.toggle = (name, value) => { writes.push([index, name, value]); return toggle(name, value); };
+  });
+  await page.type(0, 'First');
+  await page.type(0, 'First sentence.');
+  await page.type(1, 'Second');
+  assert.deepEqual(writes, []);
+  await page.click(page.group(0).check);
+  assert.equal(writes.length, 2);
+  assert.equal(writes.every(([index]) => index === 0), true);
+  writes.length = 0;
+  await page.type(1, 'Second sentence!');
+  assert.deepEqual(writes, []);
+  await page.click(page.group(0).edit);
+  assert.equal(writes.length, 2);
+  assert.equal(writes.every(([index]) => index === 0), true);
+  assert.deepEqual(page.$('sentenceProgressSegments').children, segments);
 });

@@ -52,7 +52,9 @@
         groups.push({ draft: group.draft, ...selection(group, group.draft),
           referenceVisible: group.referenceVisible !== false,
           scrollTop: boundedInteger(group.scrollTop, 0, 100000000),
-          ...(typeof group.checked === "boolean" ? { checked: group.checked } : {}) });
+          ...(typeof group.checked === "boolean" ? { checked: group.checked } : {}),
+          ...(typeof group.collapsed === "boolean" ? { collapsed: group.collapsed } : {}),
+          ...(typeof group.reviewCompleted === "boolean" ? { reviewCompleted: group.reviewCompleted } : {}) });
       }
       result.sentence = { groupSize: sentence.groupSize, groups,
         activeGroup: boundedInteger(sentence.activeGroup, 0, Math.max(0, groups.length - 1)),

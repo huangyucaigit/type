@@ -215,22 +215,42 @@
   function compareWords(expected, actual) {
     const expectedWords = String(expected ?? '').match(/\S+/g) ?? [];
     const actualPieces = String(actual ?? '').match(/\s+|\S+/g) ?? [];
-    const actualWords = actualPieces.filter(piece => !/^\s+$/.test(piece));
+    const actualWords = [];
+    const actualWordStarts = [];
+    let actualOffset = 0;
+    let actualWordEnd = 0;
+    for (const piece of actualPieces) {
+      if (!/^\s+$/.test(piece)) {
+        actualWords.push(piece);
+        actualWordStarts.push(actualOffset);
+        actualWordEnd = actualOffset + piece.length;
+      }
+      actualOffset += piece.length;
+    }
     const alignment = alignWords(expectedWords, actualWords);
     const wordStates = [];
     const missing = [];
     let correct = 0;
     let errorCount = 0;
+    let nextActualIndex = 0;
 
     for (const item of alignment) {
       if (item.state === 'missing') {
-        missing.push({ text: expectedWords[item.expectedIndex], expectedIndex: item.expectedIndex });
+        // Keep the boundary in the original UTF-16 input so a renderer can
+        // place omissions inline without changing the draft or its whitespace.
+        // Consecutive omissions share a boundary and retain alignment order.
+        missing.push({
+          text: expectedWords[item.expectedIndex],
+          expectedIndex: item.expectedIndex,
+          actualOffset: actualWordStarts[nextActualIndex] ?? actualWordEnd,
+        });
       } else {
         wordStates[item.actualIndex] = {
           state: item.state,
           expected: item.expectedIndex < 0 ? null : expectedWords[item.expectedIndex],
           actualIndex: item.actualIndex,
         };
+        nextActualIndex = item.actualIndex + 1;
       }
       if (item.state === 'correct') correct += 1;
       else errorCount += 1;
