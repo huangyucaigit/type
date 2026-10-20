@@ -64,7 +64,7 @@ async function fixture(t, options = {}) {
     const post = (url, body = {}, extra = {}) => request(url, { method: 'POST', body, ...extra });
     return { fingerprint, userAgent, request, post,
       session: () => request('/api/auth/session'),
-      register: (email, extra = {}) => post('/api/auth/register', { email, password: PASSWORD, fingerprint, ...extra }),
+      register: (email, extra = {}) => post('/api/auth/register', { nickname: '练习同学', email, password: PASSWORD, fingerprint, ...extra }),
       login: email => post('/api/auth/login', { email, password: PASSWORD, fingerprint }),
       visit: (code, extra = {}) => post('/api/referrals/visit', { code, fingerprint, ...extra }),
       prepare: () => post('/api/referrals/prepare', { fingerprint }),
@@ -138,7 +138,7 @@ test('a newly invited registration rewards only its inviter and leaves the invit
   assert.equal((await owner.c.session()).data.referral.rewardedCount, 0);
   // The signed browser Cookie preserves attribution even for older clients
   // which do not repeat the fingerprint in their registration request.
-  const registered = await friend.post('/api/auth/register', { email: 'friend@example.test', password: PASSWORD });
+  const registered = await friend.post('/api/auth/register', { nickname: '练习同学', email: 'friend@example.test', password: PASSWORD });
   assert.equal(registered.status, 200);
   assert.equal(registered.data.user.emailVerified, false);
   assert.equal(registered.data.starter.status, 'available');

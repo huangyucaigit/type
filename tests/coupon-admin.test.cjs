@@ -235,7 +235,7 @@ test('CLI creates and preserves activities across restarts, and enable/disable r
   };
   try {
     await call('/api/auth/session');
-    await call('/api/auth/register', { email: 'coupon-cli@example.test', password: 'Private-test-password-17' });
+    await call('/api/auth/register', { nickname: '练习同学', email: 'coupon-cli@example.test', password: 'Private-test-password-17' });
     const redeemed = await call('/api/coupons/redeem', { code: 'SUMMER-XHS' });
     issuedDeadline = redeemed.entitlement.expiresAt;
     assert.equal(redeemed.lastGrant.days, 7);

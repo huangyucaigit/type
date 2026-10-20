@@ -146,8 +146,8 @@
           animatedDays = days;
         }
       } else {
-        $('starterWheelTitle').textContent = eligible ? '抽一份免费练习时长' : '新手免费礼';
-        $('starterWheelDescription').textContent = !eligible ? '新手奖励每账号、每浏览器限领一份。' : state.user ? '免费抽一次，必得 3–7 天，领取后立即生效。' : '免费抽一次，注册后领取，必得 3–7 天。';
+        $('starterWheelTitle').textContent = eligible ? '抽一份免费练习时长' : '新手礼';
+        $('starterWheelDescription').textContent = !eligible ? '新手奖励每账号、每浏览器限领一份。' : state.user ? '免费抽取 3–7 天练习时长，领取后立即生效。' : '免费抽取 3–7 天练习时长，注册后领取。';
         action.textContent = busy ? (phase === 'claiming' ? '正在领取…' : '正在抽奖…') : eligible ? (error ? '重试抽奖' : '免费抽一次') : '查看我的账户';
       }
     }

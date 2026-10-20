@@ -54,7 +54,7 @@ async function fixture(t, options = {}) {
     });
   }
   const post = (url, body = {}, options = {}) => request(url, { method: 'POST', body, ...options });
-  const register = (email = 'learner@example.test') => post('/api/auth/register', { email, password: 'Test-password-8024' });
+  const register = (email = 'learner@example.test') => post('/api/auth/register', { nickname: '练习同学', email, password: 'Test-password-8024' });
   return { request, post, register, messages, sms, aiCalls, cookies, authService, now: () => timestamp, advance: ms => { timestamp += ms; } };
 }
 
@@ -79,8 +79,8 @@ test('a visitor can use every AI feature for 24h without registration, then exte
   assert.equal(session.data.entitlement.hasAccess, false);
   assert.equal(session.headers['cache-control'], 'no-store');
   assert.ok(session.headers['set-cookie'].some(cookie => /HttpOnly/.test(cookie) && /SameSite=Lax/.test(cookie)));
-  assert.equal((await f.post('/api/auth/register', { email: 'learner@example.test', password: 'Test-password-8024' }, { headers: { 'X-CSRF-Token': 'forged' } })).status, 403);
-  assert.equal((await f.post('/api/auth/register', {}, { headers: { Origin: 'https://attacker.test' } })).status, 403);
+  assert.equal((await f.post('/api/auth/register', { nickname: '练习同学', email: 'learner@example.test', password: 'Test-password-8024' }, { headers: { 'X-CSRF-Token': 'forged' } })).status, 403);
+  assert.equal((await f.post('/api/auth/register', { nickname: '练习同学',}, { headers: { Origin: 'https://attacker.test' } })).status, 403);
   assert.equal((await f.post('/api/guest/start', { fingerprint: '1'.repeat(64) }, { headers: { 'X-CSRF-Token': 'forged' } })).status, 403);
   const guest = await f.post('/api/guest/start', { fingerprint: '1'.repeat(64) });
   assert.equal(guest.status, 200);
@@ -146,7 +146,7 @@ test('SMS first login creates an account without claiming a coupon, and logout p
   assert.equal((await f.post('/api/auth/sms/send', { phone: '123456', purpose: 'login' })).status, 400);
   assert.equal((await f.post('/api/auth/sms/send', { phone: '13341313711', purpose: 'login' })).status, 200);
   assert.equal(f.sms.length, 1);
-  const loggedIn = await f.post('/api/auth/sms/login', { phone: '13341313711', code: f.sms[0].code });
+  const loggedIn = await f.post('/api/auth/sms/login', { nickname: '练习同学', phone: '13341313711', code: f.sms[0].code });
   assert.equal(loggedIn.status, 200);
   assert.equal(loggedIn.data.user.phone, '13341313711');
   assert.equal(loggedIn.data.starter.status, 'available');
@@ -176,7 +176,7 @@ test('public accounts require HTTPS and only a trusted proxy can select Secure c
   const session = await f.request('/api/auth/session', { headers: encrypted });
   assert.equal(session.status, 200);
   assert.ok(session.headers['set-cookie'].every(cookie => /; Secure/.test(cookie)));
-  const registered = await f.post('/api/auth/register', { email: 'secure@example.test', password: 'Test-password-7239' }, { headers: encrypted });
+  const registered = await f.post('/api/auth/register', { nickname: '练习同学', email: 'secure@example.test', password: 'Test-password-7239' }, { headers: encrypted });
   assert.equal(registered.status, 200);
   assert.ok(registered.headers['set-cookie'].some(cookie => /zijian_session=/.test(cookie) && /; Secure/.test(cookie)));
   const untrusted = await fixture(t, settings);

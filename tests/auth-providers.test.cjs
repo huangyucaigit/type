@@ -8,7 +8,7 @@ const configured = {
   ALIYUN_ACCESS_KEY_SECRET: 'sms-test-secret',
   ALIYUN_SMS_REGION_ID: 'cn-hangzhou',
   ALIYUN_SMS_SIGN_NAME: '长沙松鼠信息火星叔叔',
-  ALIYUN_SMS_LOGIN_TEMPLATE_CODE: 'SMS_172825132',
+  ALIYUN_SMS_LOGIN_TEMPLATE_CODE: 'SMS_512626353',
   AWS_ACCESS_KEY_ID: 'email-test-id',
   AWS_SECRET_ACCESS_KEY: 'email-test-secret',
   AWS_REGION: 'us-east-1',
@@ -94,7 +94,7 @@ test('SMS sends one signed HTTPS POST form with the selected signature and login
   const form = new URLSearchParams(captured.body);
   assert.equal(form.get('PhoneNumbers'), '13341313711');
   assert.equal(form.get('SignName'), '长沙松鼠信息火星叔叔');
-  assert.equal(form.get('TemplateCode'), 'SMS_172825132');
+  assert.equal(form.get('TemplateCode'), 'SMS_512626353');
   assert.deepEqual(JSON.parse(form.get('TemplateParam')), { code: '104592' });
   assert.equal(captured.url.includes('104592'), false);
   assert.equal(captured.signal instanceof AbortSignal, true);
@@ -136,6 +136,47 @@ test('SMS provider rejects business failures without returning sensitive provide
     assert.equal('cause' in error, false);
     return true;
   });
+});
+
+test('uncertain SMS outcomes are never retried and diagnostics cannot expose credentials, OTP or provider messages', async () => {
+  const { createAuthProviders } = await providersPromise;
+  for (const fail of [
+    async () => { throw new DOMException('sms-test-secret 123456 13341313711', 'TimeoutError'); },
+    async () => { throw new TypeError('private', { cause: { code: 'ECONNRESET', secret: 'sms-test-secret' } }); },
+    async () => new Response('private', { status: 503 }),
+    async () => new Response('sms-test-secret', { status: 200 }),
+    async () => response({}),
+  ]) {
+    let calls = 0; const diagnostics = [];
+    const provider = createAuthProviders({ env: configured, onDiagnostic: record => diagnostics.push(record), fetchImpl: async () => { calls++; return fail(); } });
+    await assert.rejects(provider.sendSms({ phone: '13341313711', code: '123456' }), error => {
+      assert.equal(error.code, 'SMS_SEND_UNCERTAIN');
+      assert.match(error.message, /收到验证码可直接登录/);
+      assert.doesNotMatch(error.stack, /sms-test-secret|13341313711|123456|private/);
+      return true;
+    });
+    assert.equal(calls, 1);
+    assert.equal(diagnostics.length, 1);
+    assert.equal(diagnostics[0].event, 'sms_provider_failure');
+    assert.doesNotMatch(JSON.stringify(diagnostics), /sms-test-secret|sms-test-id|13341313711|123456|private/);
+  }
+});
+
+test('SMS rejection logs only an allowlisted code and request ID, and logger failures do not affect sending', async () => {
+  const { createAuthProviders } = await providersPromise;
+  const diagnostics = [], requestId = '01A15703-0A37-5005-912F-CBDBD73C79A2';
+  for (const httpStatus of [200, 400]) {
+    const provider = createAuthProviders({ env: configured, onDiagnostic: entry => diagnostics.push(entry), fetchImpl: async () => new Response(JSON.stringify({
+      Code: 'isv.SMS_SIGNATURE_ILLEGAL', RequestId: requestId, Message: 'sms-test-id sms-test-secret 123456 13341313711',
+    }), { status: httpStatus }) });
+    await assert.rejects(provider.sendSms({ phone: '13341313711', code: '123456' }), { code: 'SMS_UNAVAILABLE' });
+  }
+  assert.equal(diagnostics.length, 2);
+  assert.equal(diagnostics[0].providerCode, 'isv.SMS_SIGNATURE_ILLEGAL');
+  assert.equal(diagnostics[1].requestId, requestId);
+  assert.doesNotMatch(JSON.stringify(diagnostics), /sms-test-id|sms-test-secret|123456|13341313711/);
+  const provider = createAuthProviders({ env: configured, onDiagnostic: () => { throw Error('private logger failed'); }, fetchImpl: async () => response({Code:'isv.SMS_SIGNATURE_ILLEGAL'}) });
+  await assert.rejects(provider.sendSms({ phone:'13341313711', code:'123456' }), {code:'SMS_UNAVAILABLE'});
 });
 
 test('SES reset and binding emails use signed HTTPS API requests and distinct UTF-8 content', async () => {

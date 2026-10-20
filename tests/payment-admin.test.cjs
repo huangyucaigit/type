@@ -79,7 +79,7 @@ async function seed(filename, { paid = false, failedNotification = false, planId
   let order, userId;
   try {
     await call('/api/auth/session');
-    userId = (await call('/api/auth/register', { email: `operator-${randomUUID()}@example.test`, password: 'Operator-test-password-1234' })).user.id;
+    userId = (await call('/api/auth/register', { nickname: '练习同学', email: `operator-${randomUUID()}@example.test`, password: 'Operator-test-password-1234' })).user.id;
     if (withOrder) {
       order = (await call('/api/billing/orders', { planId, requestId: randomUUID() })).order;
       if (paid) order = (await call(`/api/billing/orders/${order.orderNo}/mock-complete`, {})).order;

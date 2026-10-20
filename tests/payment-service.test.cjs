@@ -44,7 +44,7 @@ async function setup(t, options = {}) {
         return result;
       },
       init() { return this.call('/api/auth/session'); },
-      register(email = `payment-${randomUUID()}@example.test`) { return this.call('/api/auth/register', { email, password: 'Payment-password-81' }); },
+      register(email = `payment-${randomUUID()}@example.test`) { return this.call('/api/auth/register', { nickname: '练习同学', email, password: 'Payment-password-81' }); },
       create(planId = 'monthly', requestId = randomUUID(), extra = {}) { return this.call('/api/billing/orders', { planId, requestId, ...extra }); },
       detail(no) { return this.call(`/api/billing/orders/${no}`); },
       action(no, action) { return this.call(`/api/billing/orders/${no}/${action}`, {}); },

@@ -40,7 +40,7 @@ async function setup(t, options = {}) {
         return result;
       },
       init() { return this.call('/api/auth/session'); },
-      register(email = `${browser.replace(/\W/g, '').toLowerCase()}@example.test`, extra = {}) { return this.call('/api/auth/register', { email, password: PASSWORD, fingerprint, ...extra }); },
+      register(email = `${browser.replace(/\W/g, '').toLowerCase()}@example.test`, extra = {}) { return this.call('/api/auth/register', { nickname: '练习同学', email, password: PASSWORD, fingerprint, ...extra }); },
       login(email) { return this.call('/api/auth/login', { email, password: PASSWORD, fingerprint }); },
       logout() { return this.call('/api/auth/logout', {}); },
       prepare() { return this.call('/api/referrals/prepare', { fingerprint }); },
@@ -196,7 +196,7 @@ test('cleared cookies recover attribution for registration and preserve browser 
 test('cookie based attribution remains compatible with registration callers that omit fingerprint', async t => {
   const h = await setup(t), { owner, code } = await inviter(h), visitor = h.client();
   await visitor.init(); await visitor.visit(code);
-  await visitor.call('/api/auth/register', { email: 'old-client@example.test', password: PASSWORD });
+  await visitor.call('/api/auth/register', { nickname: '练习同学', email: 'old-client@example.test', password: PASSWORD });
   assert.equal((await owner.init()).referral.rewardedCount, 1);
 });
 
@@ -253,11 +253,11 @@ test('SMS creates one referral reward for a new account and never for existing S
   const { owner, code } = await inviter(h), visitor = h.client();
   await visitor.init(); await visitor.visit(code);
   await visitor.call('/api/auth/sms/send', { phone: '13300000091' });
-  await visitor.call('/api/auth/sms/login', { phone: '13300000091', code: sent.code, fingerprint: visitor.fingerprint });
+  await visitor.call('/api/auth/sms/login', { nickname: '练习同学', phone: '13300000091', code: sent.code, fingerprint: visitor.fingerprint });
   assert.equal((await owner.init()).referral.rewardedCount, 1);
   const existing = h.client(); await existing.init(); await existing.visit(code); h.advance(60000);
   await existing.call('/api/auth/sms/send', { phone: '13300000091' });
-  await existing.call('/api/auth/sms/login', { phone: '13300000091', code: sent.code, fingerprint: existing.fingerprint });
+  await existing.call('/api/auth/sms/login', { nickname: '练习同学', phone: '13300000091', code: sent.code, fingerprint: existing.fingerprint });
   assert.equal((await owner.init()).referral.rewardedCount, 1);
 });
 
@@ -300,7 +300,7 @@ test('concurrent registrations against separate SQLite connections cannot exceed
         const fingerprint = String(workerData.index).padStart(64,'0');
         await call('/api/auth/session');
         await call('/api/referrals/visit', { code: workerData.code, fingerprint });
-        const registered = await call('/api/auth/register', { email: 'concurrent-'+workerData.index+'@example.test', password: 'Invite-password-27', fingerprint });
+        const registered = await call('/api/auth/register', { nickname: '练习同学', email: 'concurrent-'+workerData.index+'@example.test', password: 'Invite-password-27', fingerprint });
         parentPort.postMessage({ id: registered.user.id });
       } finally { service.close(); }
     })().catch(error => { parentPort.postMessage({ error: error.stack }); process.exitCode=1; });

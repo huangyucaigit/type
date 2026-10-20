@@ -222,8 +222,9 @@
       for (const purchase of document.querySelectorAll('[data-buy-plan]')) purchase.disabled = !enabled || state.busy;
       const plansNote = $('billingPlansNote');
       if (plansNote) plansNote.textContent = state.billing?.mode === 'mock'
-        ? '当前为模拟支付，不扣款。可完整体验下单与时长到账流程。'
+        ? '本地预览使用模拟支付，不会扣款；真实购买请前往正式网站。'
         : enabled ? '付款完成后自动增加练习时长，可在订单记录中查看。' : '套餐暂未开放购买，已有时长可正常使用。';
+      if ($('billingLiveSiteLink')) $('billingLiveSiteLink').hidden = state.billing?.mode !== 'mock';
       if (!state.active) { if (dialog.open) dialog.close(); return; }
       content.setAttribute('aria-busy', String(state.busy));
       if (paid(state.order)) {
@@ -231,7 +232,7 @@
         if (grant !== refreshedGrant) { refreshedGrant = grant; void auth()?.refresh?.(); }
       }
       const view = orderView(state.order, state.now), modeLabel = $('billingModeLabel');
-      if (modeLabel) modeLabel.textContent = state.billing?.mode === 'mock' ? '模拟支付 · 不扣款' : '练习时长';
+      if (modeLabel) modeLabel.textContent = state.billing?.mode === 'mock' ? '本地模拟支付 · 不扣款' : '练习时长';
       $('billingTitle').textContent = state.screen === 'history' ? '我的订单' : view.title;
       $('billingDescription').textContent = state.screen === 'history' ? '最近 20 笔订单。未完成的订单可继续查看。' : view.description;
       const message = $('billingMessage'); message.textContent = state.error; message.hidden = !state.error;
@@ -286,12 +287,12 @@
     }
     async function open(planId) {
       await auth()?.ready;
-      if (!auth()?.getState?.().user) { pendingLogin = { planId }; auth()?.open('login'); return; }
+      if (!auth()?.getState?.().user) { pendingLogin = { planId }; auth()?.open(); return; }
       pendingLogin = null; showDialog(); return controller.open(planId);
     }
     async function openHistory() {
       await auth()?.ready;
-      if (!auth()?.getState?.().user) { pendingLogin = { history: true }; auth()?.open('login'); return; }
+      if (!auth()?.getState?.().user) { pendingLogin = { history: true }; auth()?.open(); return; }
       pendingLogin = null; showDialog(); return controller.openHistory();
     }
     function close() { controller.close(); if (dialog.open) dialog.close(); }

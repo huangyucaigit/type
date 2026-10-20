@@ -262,7 +262,7 @@
       const rect = dialog.getBoundingClientRect();
       if (event.clientX < rect.left || event.clientX > rect.right || event.clientY < rect.top || event.clientY > rect.bottom) close();
     });
-    login.addEventListener('click', () => { close(); auth()?.open?.('login'); });
+    login.addEventListener('click', () => { close(); auth()?.open?.(); });
     copy.addEventListener('click', async () => {
       const model = controller.snapshot().model;
       if (!model) return;

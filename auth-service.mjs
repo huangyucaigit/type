@@ -16,7 +16,7 @@ const GUEST_MS = DAY;
 const STARTER_CLAIM_MS = 7 * DAY;
 const REFERRAL_ATTRIBUTION_MS = 30 * DAY;
 const REFERRAL_REWARD_LIMIT = 3;
-const CODE_MS = 5 * 60000;
+const CODE_MS = 30 * 60000;
 const TOKEN_MS = 30 * 60000;
 const SESSION_COOKIE = 'zijian_session';
 const DEVICE_COOKIE = 'zijian_device';
@@ -62,6 +62,13 @@ function passwordValue(value) {
     throw new AuthError(400, '密码需要 8 至 128 个字符。', 'INVALID_PASSWORD');
   }
   return value;
+}
+
+function nicknameValue(value) {
+  if (typeof value !== 'string') throw new AuthError(400, '请填写 1 至 10 个字的昵称。', 'INVALID_NICKNAME');
+  const nickname = value.trim().normalize('NFC');
+  if (!nickname || [...nickname].length > 10 || /[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/u.test(nickname)) throw new AuthError(400, '昵称需要 1 至 10 个字，不能包含控制字符。', 'INVALID_NICKNAME');
+  return nickname;
 }
 
 function hash(value) { return createHash('sha256').update(value).digest('hex'); }
@@ -112,6 +119,7 @@ export function createAuthService({ filename = path.join(process.env.ZIJIAN_AUTH
     CREATE TABLE IF NOT EXISTS auth_settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);
     CREATE TABLE IF NOT EXISTS auth_users (
       id TEXT PRIMARY KEY, email TEXT UNIQUE, phone TEXT UNIQUE, password_hash TEXT,
+      nickname TEXT,
       email_verified INTEGER NOT NULL DEFAULT 0, created_at INTEGER NOT NULL,
       trial_started_at INTEGER, trial_ends_at INTEGER, paid_until INTEGER
     );
@@ -188,6 +196,7 @@ export function createAuthService({ filename = path.join(process.env.ZIJIAN_AUTH
       guest_id TEXT NOT NULL UNIQUE REFERENCES access_guests(id),
       days INTEGER NOT NULL CHECK(days BETWEEN 3 AND 7), granted_at INTEGER NOT NULL
     );`);
+  if (!db.prepare('PRAGMA table_info(auth_users)').all().some(column => column.name === 'nickname')) db.exec('ALTER TABLE auth_users ADD COLUMN nickname TEXT');
   if (!db.prepare('PRAGMA table_info(auth_users)').all().some(column => column.name === 'account_ends_at')) {
     db.exec('ALTER TABLE auth_users ADD COLUMN account_ends_at INTEGER');
   }
@@ -371,7 +380,7 @@ export function createAuthService({ filename = path.join(process.env.ZIJIAN_AUTH
     const guest = guestRecord(deviceId);
     if (user && guest) rememberAccountBrowser(user.id, deviceId, guest, timestamp);
     return {
-      user: user ? { id: user.id, email: user.email, phone: user.phone, emailVerified: Boolean(user.email_verified) } : null,
+      user: user ? { id: user.id, nickname: user.nickname || null, email: user.email, phone: user.phone, emailVerified: Boolean(user.email_verified) } : null,
       entitlement: entitlement(user, deviceId, timestamp), guest: guestState(deviceId, timestamp), starter: starterState(user, deviceId, timestamp), starterDraw: starterDrawState(user, deviceId, timestamp), serverTime: timestamp,
       csrfToken: mac(`csrf:${deviceId}`), providers: providerStatus, referral: referralState(user, timestamp),
       ...(message ? { message } : {}),
@@ -391,7 +400,7 @@ export function createAuthService({ filename = path.join(process.env.ZIJIAN_AUTH
     return body.code;
   }
   // A failed attempt must commit, including the fifth attempt which removes the code.
-  function consumeCode(phone, purpose, code, timestamp) {
+  function consumeCode(phone, purpose, code, timestamp, consume = true) {
     const result = transaction(() => {
       const item = db.prepare('SELECT * FROM auth_sms_codes WHERE phone=? AND purpose=?').get(phone, purpose);
       if (!item || item.expires_at <= timestamp || item.attempts >= 5) {
@@ -403,7 +412,7 @@ export function createAuthService({ filename = path.join(process.env.ZIJIAN_AUTH
         else db.prepare('UPDATE auth_sms_codes SET attempts=attempts+1 WHERE phone=? AND purpose=?').run(phone, purpose);
         return false;
       }
-      db.prepare('DELETE FROM auth_sms_codes WHERE phone=? AND purpose=?').run(phone, purpose);
+      if (consume) db.prepare('DELETE FROM auth_sms_codes WHERE phone=? AND purpose=?').run(phone, purpose);
       return true;
     });
     if (!result) throw new AuthError(400, '验证码错误或已过期，请重新获取。', 'INVALID_CODE');
@@ -414,7 +423,7 @@ export function createAuthService({ filename = path.join(process.env.ZIJIAN_AUTH
       await providers[method](input);
     } catch (error) {
       if (error instanceof AuthError) throw error;
-      if (error instanceof AuthProviderError) throw new AuthError(error.status, error.message, error.code);
+      if (error instanceof AuthProviderError) throw new AuthError(error.status, error.message, error.code, error.code === 'SMS_SEND_UNCERTAIN' ? 60 : undefined);
       throw new AuthError(503, method === 'sendSms' ? '短信暂时无法发送，请稍后重试。' : '邮件暂时无法发送，请稍后重试。', 'DELIVERY_UNAVAILABLE');
     }
   }
@@ -892,7 +901,7 @@ export function createAuthService({ filename = path.join(process.env.ZIJIAN_AUTH
       }
       return state(request, deviceId, timestamp);
     }
-    const known = new Set(['/api/auth/register', '/api/auth/login', '/api/auth/sms/send', '/api/auth/sms/login', '/api/auth/logout', '/api/auth/password/forgot', '/api/auth/password/reset', '/api/auth/password/change', '/api/auth/email/bind', '/api/auth/email/confirm', '/api/auth/phone/bind', '/api/guest/start', '/api/coupons/starter/draw', '/api/coupons/starter/claim', '/api/coupons/redeem', '/api/referrals/visit', '/api/referrals/prepare']);
+    const known = new Set(['/api/auth/register', '/api/auth/login', '/api/auth/sms/send', '/api/auth/sms/login', '/api/auth/logout', '/api/auth/profile', '/api/auth/password/forgot', '/api/auth/password/reset', '/api/auth/password/change', '/api/auth/email/bind', '/api/auth/email/confirm', '/api/auth/phone/bind', '/api/guest/start', '/api/coupons/starter/draw', '/api/coupons/starter/claim', '/api/coupons/redeem', '/api/referrals/visit', '/api/referrals/prepare']);
     if (!known.has(pathname)) throw new AuthError(404, '接口不存在。', 'NOT_FOUND');
     if (request.method !== 'POST') throw new AuthError(405, '请求方法不受支持。', 'METHOD_NOT_ALLOWED');
     if (!deviceId || !equal(request.headers?.['x-csrf-token'], mac(`csrf:${deviceId}`))) throw new AuthError(403, '页面验证已失效，请刷新后重试。', 'CSRF_INVALID');
@@ -927,6 +936,7 @@ export function createAuthService({ filename = path.join(process.env.ZIJIAN_AUTH
     }
     if (pathname === '/api/auth/register') {
       const email = emailValue(body.email), password = passwordValue(body.password);
+      const nickname = nicknameValue(body.nickname);
       rate('register-ip', clientIp, 10, 3600000, timestamp);
       const encoded = await passwordHash(password);
       const userId = transaction(() => {
@@ -934,7 +944,7 @@ export function createAuthService({ filename = path.join(process.env.ZIJIAN_AUTH
         const guest = optionalRegistrationGuest(body, request, deviceId, clientIp);
         const priorAccount = sessionUser(request, timestamp);
         const id = randomUUID();
-        db.prepare('INSERT INTO auth_users (id,email,password_hash,created_at) VALUES (?,?,?,?)').run(id, email, encoded, timestamp);
+        db.prepare('INSERT INTO auth_users (id,email,password_hash,nickname,created_at) VALUES (?,?,?,?,?)').run(id, email, encoded, nickname, timestamp);
         consumeReferral(id, deviceId, guest, timestamp, true, priorAccount);
         rememberAccountBrowser(id, deviceId, guest, timestamp);
         return id;
@@ -980,14 +990,25 @@ export function createAuthService({ filename = path.join(process.env.ZIJIAN_AUTH
       });
       try { await send('sendSms', { phone, code }); }
       catch (error) {
-        db.prepare('DELETE FROM auth_sms_codes WHERE phone=? AND purpose=? AND code_hash=?').run(phone, purpose, codeHash);
+        // A timeout/reset may happen after Aliyun accepted the SMS. Keep its
+        // hashed OTP usable and preserve the resend cooldown in that case.
+        if (error.code !== 'SMS_SEND_UNCERTAIN') db.prepare('DELETE FROM auth_sms_codes WHERE phone=? AND purpose=? AND code_hash=?').run(phone, purpose, codeHash);
         throw error;
       }
-      return { message: '验证码已发送，5 分钟内有效。', retryAfter: 60 };
+      return { message: '验证码已发送，30 分钟内有效。', retryAfter: 60 };
     }
     if (pathname === '/api/auth/sms/login') {
       const phone = phoneValue(body.phone), code = validateCode(body);
       rate('sms-login-ip', clientIp, 30, 15 * 60000, timestamp);
+      const existing = db.prepare('SELECT id FROM auth_users WHERE phone=?').get(phone);
+      let nickname;
+      if (!existing) {
+        // Only a valid OTP reveals registration. Keep it usable during the
+        // nickname step; invalid attempts still commit and expire after five.
+        consumeCode(phone, 'login', code, timestamp, false);
+        if (body.nickname === undefined) throw new AuthError(400, '手机号验证成功，请设置昵称完成注册。', 'NICKNAME_REQUIRED');
+        nickname = nicknameValue(body.nickname);
+      }
       consumeCode(phone, 'login', code, timestamp);
       const userId = transaction(() => {
         const guest = optionalRegistrationGuest(body, request, deviceId, clientIp), priorAccount = sessionUser(request, timestamp);
@@ -998,12 +1019,18 @@ export function createAuthService({ filename = path.join(process.env.ZIJIAN_AUTH
           return previous.id;
         }
         const id = randomUUID();
-        db.prepare('INSERT INTO auth_users (id,phone,created_at) VALUES (?,?,?)').run(id, phone, timestamp);
+        db.prepare('INSERT INTO auth_users (id,phone,nickname,created_at) VALUES (?,?,?,?)').run(id, phone, nickname, timestamp);
         consumeReferral(id, deviceId, guest, timestamp, true, priorAccount);
         rememberAccountBrowser(id, deviceId, guest, timestamp);
         return id;
       });
       return state(authenticate(request, response, userId, secure, time()), deviceId, time(), '登录成功。');
+    }
+    if (pathname === '/api/auth/profile') {
+      const user = requireUser(request, timestamp), nickname = nicknameValue(body.nickname);
+      rate('profile-user', user.id, 10, 3600000, timestamp);
+      db.prepare('UPDATE auth_users SET nickname=? WHERE id=?').run(nickname, user.id);
+      return state(request, deviceId, time(), '昵称已保存。');
     }
     if (pathname === '/api/auth/logout') {
       const token = cookies(request)[SESSION_COOKIE];
@@ -1204,7 +1231,7 @@ export function createAuthService({ filename = path.join(process.env.ZIJIAN_AUTH
       if (access.status === 'guest_available') throw new AuthError(403, '首次开始练习即可免费体验 24 小时。', 'GUEST_REQUIRED');
       throw new AuthError(403, user ? '当前使用时长已结束，可领取或兑换时长券后继续使用。' : '游客体验已结束，登录后可领取或兑换时长券。', 'ACCESS_EXPIRED');
     }
-    return { user: user ? { id: user.id, email: user.email, phone: user.phone } : null, entitlement: access };
+    return { user: user ? { id: user.id, nickname: user.nickname || null, email: user.email, phone: user.phone } : null, entitlement: access };
   }
 
   return { handle, receivePaymentNotification, createPaymentAcceptanceOrder, getBillingOrder, retryBillingNotification, requireAccess, createCampaign, getCampaigns, setCampaignEnabled, close() { if (!closed) { closed = true; db.close(); } } };

@@ -41,7 +41,7 @@ async function setup(t, options = {}) {
         return result;
       },
       init() { return this.call('/api/auth/session'); },
-      register(email = 'draw@example.test') { return this.call('/api/auth/register', { email, password: PASSWORD }); },
+      register(email = 'draw@example.test') { return this.call('/api/auth/register', { nickname: '练习同学', email, password: PASSWORD }); },
       login(email = 'draw@example.test') { return this.call('/api/auth/login', { email, password: PASSWORD }); },
       draw(fingerprint = FP, overrides) { return this.call('/api/coupons/starter/draw', { fingerprint }, overrides); },
       claim(fingerprint = FP) { return this.call('/api/coupons/starter/claim', { fingerprint }); },
@@ -118,7 +118,7 @@ test('SMS auto-registration preserves an anonymous pending draw without activati
   const h = await setup(t, { providers: { status: { sms: true }, sendSms: async input => { sent = input; } } }), c = h.client();
   await c.init(); await c.draw();
   await c.call('/api/auth/sms/send', { phone: '13300000001' });
-  const logged = await c.call('/api/auth/sms/login', { phone: '13300000001', code: sent.code });
+  const logged = await c.call('/api/auth/sms/login', { nickname: '练习同学', phone: '13300000001', code: sent.code });
   assert.equal(logged.user.phone, '13300000001');
   assert.equal(logged.starterDraw.status, 'pending');
   assert.equal(logged.entitlement.hasAccess, false);

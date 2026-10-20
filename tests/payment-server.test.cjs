@@ -80,7 +80,7 @@ async function fixture(t, options = {}) {
     const post = (path, body = {}, settings = {}) => request(path, { method: 'POST', body, ...settings });
     async function register(email = `billing-${clientNumber}@example.test`, headers = {}) {
       assert.equal((await request('/api/auth/session', { headers })).status, 200);
-      const result = await post('/api/auth/register', { email, password: 'Payment-test-password-1234' }, { headers });
+      const result = await post('/api/auth/register', { nickname: '练习同学', email, password: 'Payment-test-password-1234' }, { headers });
       assert.equal(result.status, 200, result.text);
       return result.data;
     }

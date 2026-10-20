@@ -30,7 +30,7 @@ async function authenticate(request, host) {
     return data;
   };
   await send('/api/auth/session');
-  await send('/api/auth/register', { email: 'ai-route-test@example.test', password: 'Test-password-7239' });
+  await send('/api/auth/register', { nickname: '练习同学', email: 'ai-route-test@example.test', password: 'Test-password-7239' });
   const state = await send('/api/coupons/starter/claim', { fingerprint: 'a'.repeat(64) });
   if (!state.entitlement.hasAccess) throw new Error('Test account did not receive its starter coupon.');
   return [...cookies].map(([key, value]) => `${key}=${value}`).join('; ');

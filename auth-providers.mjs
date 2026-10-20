@@ -90,9 +90,30 @@ function validatedLink(value) {
   } catch { return null; }
 }
 
-async function requestJson(fetchImpl, signedRequest, { kind, timeout }) {
+function reportSmsFailure(logger, { stage, httpStatus, providerCode, requestId, error } = {}) {
+  const entry = { event: 'sms_provider_failure', stage };
+  if (Number.isInteger(httpStatus)) entry.httpStatus = httpStatus;
+  if (typeof providerCode === 'string' && /^[A-Za-z][A-Za-z_.]{0,79}$/.test(providerCode)) entry.providerCode = providerCode;
+  if (typeof requestId === 'string' && /^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/i.test(requestId)) entry.requestId = requestId;
+  if (error) {
+    entry.transport = ['AbortError', 'TimeoutError'].includes(error.name) ? error.name : 'TransportError';
+    const code = error.cause?.code || error.code;
+    if (['UND_ERR_CONNECT_TIMEOUT', 'UND_ERR_SOCKET', 'ENOTFOUND', 'EAI_AGAIN', 'ECONNRESET', 'ECONNREFUSED', 'ETIMEDOUT', 'CERT_HAS_EXPIRED'].includes(code)) entry.networkCode = code;
+  }
+  // Never log phone numbers, OTPs, headers, credentials or provider messages.
+  try { logger?.(entry); } catch { /* Diagnostics cannot change delivery semantics. */ }
+}
+
+function smsFailure(uncertain = false) {
+  return new AuthProviderError(uncertain
+    ? '短信发送结果暂未确认，请先查看手机；如收到验证码可直接登录，60 秒后可重新获取。'
+    : '短信发送暂时不可用，请稍后重试。', { code: uncertain ? 'SMS_SEND_UNCERTAIN' : 'SMS_UNAVAILABLE' });
+}
+
+async function requestJson(fetchImpl, signedRequest, { kind, timeout, diagnostic }) {
   const message = kind === 'SMS' ? '短信发送暂时不可用，请稍后重试。' : '邮件发送暂时不可用，请稍后重试。';
   const failure = () => new AuthProviderError(message, { code: `${kind}_UNAVAILABLE` });
+  let stage = 'transport', httpStatus, result;
   try {
     // No automatic retry: both providers can accept a request before a timeout.
     const response = await fetchImpl(signedRequest.url, {
@@ -102,19 +123,26 @@ async function requestJson(fetchImpl, signedRequest, { kind, timeout }) {
       redirect: 'error',
       signal: AbortSignal.timeout(timeout),
     });
-    if (!response.ok) throw failure();
+    httpStatus = response.status;
+    stage = 'response';
     const text = await response.text();
     if (text.length > 32768) throw failure();
-    const result = JSON.parse(text);
+    result = JSON.parse(text);
+    if (!response.ok) throw kind === 'SMS' ? smsFailure(httpStatus >= 500) : failure();
     if (!result || typeof result !== 'object' || Array.isArray(result)) throw failure();
     return result;
-  } catch {
+  } catch (error) {
     // Provider error bodies and transport errors can include credentials or tokens.
+    if (kind === 'SMS') {
+      reportSmsFailure(diagnostic, { stage, httpStatus, providerCode: result?.Code, requestId: result?.RequestId, error: error instanceof AuthProviderError ? undefined : error });
+      if (error instanceof AuthProviderError && error.code === 'SMS_UNAVAILABLE' && httpStatus >= 400 && httpStatus < 500) throw error;
+      throw smsFailure(httpStatus === undefined || httpStatus < 400 || httpStatus >= 500);
+    }
     throw failure();
   }
 }
 
-export function createAuthProviders({ env = process.env, fetchImpl = fetch } = {}) {
+export function createAuthProviders({ env = process.env, fetchImpl = fetch, onDiagnostic = entry => console.warn(JSON.stringify(entry)) } = {}) {
   const sms = {
     accessKeyId: configurationValue(env.ALIYUN_ACCESS_KEY_ID),
     accessKeySecret: configurationValue(env.ALIYUN_ACCESS_KEY_SECRET),
@@ -148,8 +176,11 @@ export function createAuthProviders({ env = process.env, fetchImpl = fetch } = {
       TemplateCode: sms.template, TemplateParam: JSON.stringify({ code }), RegionId: sms.region });
     const request = signAliyunRequest({ ...sms, host: SMS_HOST, action: 'SendSms', version: '2017-05-25',
       body, contentType: 'application/x-www-form-urlencoded' });
-    const result = await requestJson(fetchImpl, request, { kind: 'SMS', timeout: 15000 });
-    if (result.Code !== 'OK') throw new AuthProviderError('短信发送暂时不可用，请稍后重试。', { code: 'SMS_UNAVAILABLE' });
+    const result = await requestJson(fetchImpl, request, { kind: 'SMS', timeout: 15000, diagnostic: onDiagnostic });
+    if (result.Code !== 'OK') {
+      reportSmsFailure(onDiagnostic, { stage: 'business', httpStatus: 200, providerCode: result.Code, requestId: result.RequestId });
+      throw smsFailure(typeof result.Code !== 'string' || !result.Code);
+    }
     // Acceptance is distinct from carrier delivery; never return a fake OTP.
     return { accepted: true };
   }

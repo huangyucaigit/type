@@ -75,11 +75,11 @@
           </button>
         </div>
         <div id="accessStatus" class="access-status">
-          <span id="accessTitle" role="status">免登录体验 24 小时</span>
-          <span id="accessCountdown" hidden></span>
-          <button id="starterWheelEntry" class="starter-wheel-entry" type="button" aria-haspopup="dialog" aria-controls="starterWheelDialog" hidden><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 8v13M4 12v9h16v-9M3 8h18v4H3zM12 8H8a3 3 0 1 1 3-3l1 3Zm0 0h4a3 3 0 1 0-3-3l-1 3Z"/></svg>抽免费时长</button>
+          <div id="accessSummary" class="access-summary"><span id="accessTitle" role="status">免费体验 24 小时</span><span id="accessCountdown" hidden></span></div>
+          <button id="starterWheelEntry" class="starter-wheel-entry" type="button" aria-haspopup="dialog" aria-controls="starterWheelDialog" hidden><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 8v13M4 12v9h16v-9M3 8h18v4H3zM12 8H8a3 3 0 1 1 3-3l1 3Zm0 0h4a3 3 0 1 0-3-3l-1 3Z"/></svg>新手礼</button>
           <button id="accessRetry" class="auth-text-button" type="button" hidden>重试连接</button>
           <button id="shareButton" class="share-entry" type="button" aria-haspopup="dialog" aria-controls="shareDialog"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 15V3m-4 4 4-4 4 4M5 12v8h14v-8"/></svg>分享</button>
+          <button id="accessPlans" class="button button-primary access-plans-entry" type="button" aria-haspopup="dialog" aria-controls="plansDialog" hidden>购买时长</button>
         </div>
       </div>
 
@@ -213,8 +213,8 @@
   </dialog>
 
   <dialog id="starterWheelDialog" class="starter-wheel-dialog" aria-labelledby="starterWheelTitle" aria-describedby="starterWheelDescription starterWheelRules">
-    <div class="dialog-header"><div><span class="auth-eyebrow">新手免费礼</span><h2 id="starterWheelTitle">抽一份免费练习时长</h2></div><button id="closeStarterWheel" class="icon-button" type="button" aria-label="关闭抽奖转盘"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m6 6 12 12M18 6 6 18"/></svg></button></div>
-    <p id="starterWheelDescription" class="dialog-description">免费抽一次，注册后领取，必得 3–7 天。</p>
+    <div class="dialog-header"><div><span class="auth-eyebrow">新手礼</span><h2 id="starterWheelTitle">抽一份免费练习时长</h2></div><button id="closeStarterWheel" class="icon-button" type="button" aria-label="关闭抽奖转盘"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m6 6 12 12M18 6 6 18"/></svg></button></div>
+    <p id="starterWheelDescription" class="dialog-description">免费抽取 3–7 天练习时长，注册后领取。</p>
     <div id="starterWheelVisual" class="starter-wheel-visual" aria-hidden="true">
       <svg id="starterWheelRotor" class="starter-wheel-rotor" viewBox="0 0 300 300"></svg>
       <span class="starter-wheel-pointer"></span>
@@ -238,6 +238,7 @@
     <p id="plansDescription" class="dialog-description">所有套餐均包含全文与分句练习、范文导入和 AI 学习。试用期间也可完整体验这些功能。</p>
     <div class="plan-grid"><article class="plan-card"><h3>月度</h3><p class="plan-price"><span>¥</span>9.9<small> / 30 天</small></p><p>适合集中练习</p><button class="button button-primary" type="button" data-buy-plan="monthly" disabled>选择月度</button></article><article class="plan-card plan-featured"><span class="plan-tag">从容备考</span><h3>季度</h3><p class="plan-price"><span>¥</span>19.9<small> / 90 天</small></p><p>给进步多一点时间</p><button class="button button-primary" type="button" data-buy-plan="quarterly" disabled>选择季度</button></article><article class="plan-card"><h3>年度</h3><p class="plan-price"><span>¥</span>59.9<small> / 365 天</small></p><p>让练习成为日常</p><button class="button button-primary" type="button" data-buy-plan="yearly" disabled>选择年度</button></article></div>
     <p id="billingPlansNote" class="plans-note">正在确认支付状态。各套餐功能相同，已有时长会顺延。</p>
+    <a id="billingLiveSiteLink" class="plans-live-link" href="https://type.where.work/" target="_blank" rel="noopener noreferrer" hidden>前往正式网站购买</a>
     <button id="openBillingHistory" class="auth-text-button" type="button">订单记录</button>
     <div class="dialog-footer"><button id="plansTrialAction" class="button button-primary" type="button">注册领 3–7 天</button><button id="plansDone" class="button button-secondary" type="button">知道了</button></div>
   </dialog>

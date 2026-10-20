@@ -34,7 +34,7 @@ async function setup(t, options = {}) {
         return result;
       },
       async init() { return this.call('/api/auth/session'); },
-      async register(email = 'student@example.test') { await this.init(); return this.call('/api/auth/register', { email, password: PASSWORD }); },
+      async register(email = 'student@example.test') { await this.init(); return this.call('/api/auth/register', { nickname: '练习同学', email, password: PASSWORD }); },
       async login(email = 'student@example.test') { await this.init(); return this.call('/api/auth/login', { email, password: PASSWORD }); },
       start(fingerprint = FP, overrides) { return this.call('/api/guest/start', { fingerprint }, overrides); },
       claim(fingerprint = FP, overrides) { return this.call('/api/coupons/starter/claim', { fingerprint }, overrides); },

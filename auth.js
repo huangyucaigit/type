@@ -1,8 +1,7 @@
 (() => {
   "use strict";
 
-  // Restore these entries after the SMS signature has passed review.
-  const SHOW_SMS_AUTH = false;
+  const SHOW_SMS_AUTH = true;
 
   const $ = id => document.getElementById(id);
   const dialog = $("authDialog");
@@ -21,6 +20,7 @@
   let bindToken = "";
   let sendUntil = 0;
   let pendingEmail = "";
+  let smsRegistration = null;
   let channel = null;
   let stateRevision = 0;
   let startingGuest = null;
@@ -47,10 +47,8 @@
   const isDialogOpen = () => dialog.open || plans.open || !!window.ZijianStarterWheel?.isOpen() || !!window.ZijianShare?.isOpen() || !!window.ZijianBilling?.isOpen();
   const drawnDays = () => state.starterDraw?.status === "pending" && Number.isInteger(state.starterDraw.days)
     && state.starterDraw.days >= 3 && state.starterDraw.days <= 7 ? state.starterDraw.days : 0;
-  const accountName = () => state.user?.email || state.user?.phone || "我的账户";
-  const shortAccountName = () => state.user?.email
-    ? (state.user.email.length > 22 ? `${state.user.email.slice(0, 18)}…` : state.user.email)
-    : state.user?.phone ? `${state.user.phone.slice(0, 3)}****${state.user.phone.slice(-4)}` : "我的账户";
+  const accountName = () => state.user?.nickname || "练习同学";
+  const shortAccountName = accountName;
 
   // Reset and verification tokens are consumed from memory, never kept in the URL.
   try {
@@ -166,37 +164,42 @@
   function renderStatus() {
     $("accountButton").textContent = state.user ? shortAccountName() : "登录 / 注册";
     $("accountButton").title = state.user ? accountName() : "登录或注册账户";
-    let title = "免登录体验 24 小时";
+    let title = "免费体验 24 小时";
     let description = "首次练习时开始连续计时；登录或注册后可在账户中查看新手券。";
     $("accessRetry").hidden = !unavailable && !guestStartFailed;
     if (unavailable) {
-      title = "账户服务暂未连接";
+      title = "暂时无法获取状态";
       description = window.location.protocol === "file:"
         ? "请通过网站或本地服务访问，以开始免登录体验。"
         : "请恢复连接后重试。当前文章和输入仍可查看、复制。";
     } else if (guestStartFailed) {
       title = "体验暂未开启";
       description = "请重试连接；文章和已输入的文字会保留。";
-    } else if (hasAccess() && state.entitlement.source === "guest") {
-      title = "游客体验";
-      description = `${expiryLabel()} 到期；可在右上角账户中领取或兑换时长券。`;
     } else if (hasAccess()) {
-      title = "练习时长";
+      title = state.user ? "" : "游客体验";
       description = `${expiryLabel()} 到期${canClaim() ? "；可在账户中领取 3–7 天新手券" : ""}。`;
-    } else if (canClaim()) {
-      title = canStartGuest() ? "免登录体验 24 小时" : "新手券待领取";
-      description = "在右上角账户中领取 3–7 天新手券，游客剩余时长会一并保留。";
-    } else if (state.guest?.status !== "available" && !state.user) {
-      title = state.guest?.status === "transferred" ? "登录原账户继续" : "游客体验已结束";
-      description = state.guest?.status === "transferred" ? "登录原账户继续使用。文章和当前输入仍可查看、复制。" : "登录后可领取新手券或兑换渠道券。文章和当前输入仍可查看、复制。";
-    } else if (state.guest?.status !== "available") {
-      title = "练习时长已用完";
-      description = "可在右上角账户中兑换时长券继续练习；文章和当前输入仍可查看、复制。";
+    } else if (!state.user && state.guest?.status === "transferred") {
+      title = "";
+      description = "";
+    } else if (canStartGuest()) {
+      title = "免费体验 24 小时";
+    } else if (!state.user) {
+      title = "游客体验已结束";
+      description = "登录后可领取新手礼或购买时长。文章和当前输入仍可查看、复制。";
+    } else {
+      title = "练习时长已结束";
+      description = canClaim() ? "可领取新手礼或购买时长继续练习。" : "可购买时长或兑换时长券继续练习；文章和当前输入仍可查看、复制。";
     }
+    const transferredGuest = !state.user && state.guest?.status === "transferred";
+    const expired = !unavailable && !guestStartFailed && !hasAccess() && !canStartGuest() && !transferredGuest;
+    $("accessSummary").hidden = transferredGuest && !unavailable && !guestStartFailed;
+    $("accessStatus").classList.toggle("is-expired", expired);
+    $("accessPlans").hidden = !state.user;
     if ($("accessTitle").textContent !== title) $("accessTitle").textContent = title;
+    $("accessTitle").hidden = !title;
     $("accessStatus").title = description;
     $("plansTrialAction").hidden = !!state.user && !canClaim();
-    $("plansTrialAction").textContent = drawnDays() ? `领取抽中的 ${drawnDays()} 天` : "抽 3–7 天新手券";
+    $("plansTrialAction").textContent = drawnDays() ? `领取抽中的 ${drawnDays()} 天` : "领取新手礼";
     $("accessCountdown").hidden = !hasAccess();
     tick();
   }
@@ -232,6 +235,7 @@
   const emailField = () => field("authEmail", "邮箱", "email", 'autocomplete="username" maxlength="254" placeholder="yourname@example.com"');
   const passwordField = (label = "密码", current = false) => field("authPassword", label, "password", `autocomplete="${current ? "current-password" : "new-password"}" minlength="8" maxlength="128" placeholder="至少 8 个字符"`);
   const phoneField = () => field("authPhone", "中国大陆手机号", "tel", 'autocomplete="tel-national" inputmode="tel" pattern="1[3-9][0-9]{9}" maxlength="11" placeholder="请输入 11 位手机号"');
+  const nicknameField = () => field("authNickname", "昵称", "text", 'autocomplete="nickname" maxlength="20" placeholder="1–10 个字"') + '<p class="auth-footnote">昵称最多 10 个字，允许重名。</p>';
   const codeField = () => `<div class="auth-code-row">${field("authCode", "短信验证码", "text", 'autocomplete="one-time-code" inputmode="numeric" pattern="[0-9]{6}" minlength="6" maxlength="6" placeholder="6 位验证码"')}<button class="button button-secondary" type="button" data-send-code>获取验证码</button></div>`;
   const submit = label => `<button type="submit" class="button button-primary auth-submit">${label}</button>`;
   const route = (label, target) => `<button type="button" class="auth-text-button" data-auth-view="${target}">${label}</button>`;
@@ -253,9 +257,10 @@
     view = next;
     message(notice);
     const definitions = {
-      sms: ["欢迎回来", "短信验证码登录，首次登录将自动创建账户。", `<div class="auth-tabs" role="group" aria-label="登录方式"><button type="button" class="is-selected" data-auth-view="sms" aria-pressed="true">短信登录</button><button type="button" data-auth-view="login" aria-pressed="false">邮箱登录</button></div>${form(phoneField() + codeField() + submit("登录 / 注册"))}<p class="auth-footnote">仅支持中国大陆手机号。登录状态最长保留 365 天；你可以随时退出。</p>`],
+      sms: [smsRegistration ? "设置你的昵称" : "欢迎回来", smsRegistration ? "手机号验证成功，补充昵称完成注册。" : "推荐使用短信登录，首次注册时需设置昵称。", `<div class="auth-tabs" role="group" aria-label="登录方式"><button type="button" class="is-selected" data-auth-view="sms" aria-pressed="true">短信登录</button><button type="button" data-auth-view="login" aria-pressed="false">邮箱登录</button></div>${form(smsRegistration ? nicknameField() + submit("完成注册") : phoneField() + codeField() + submit("登录 / 注册"))}${smsRegistration ? '<button type="button" class="auth-text-button" data-restart-sms>重新输入手机号</button>' : '<p class="auth-footnote">仅支持中国大陆手机号，验证码 30 分钟内有效。登录状态最长保留 365 天；你可以随时退出。</p>'}`],
       login: ["欢迎回来", "使用邮箱与密码登录，继续你的练习。", `${SHOW_SMS_AUTH ? '<div class="auth-tabs" role="group" aria-label="登录方式"><button type="button" data-auth-view="sms" aria-pressed="false">短信登录</button><button type="button" class="is-selected" data-auth-view="login" aria-pressed="true">邮箱登录</button></div>' : ""}${form(emailField() + passwordField("密码", true) + submit("登录"))}<div class="auth-links">${route("注册邮箱账户", "register")}${route("忘记密码？", "forgot")}</div><p class="auth-footnote">登录状态最长保留 365 天；你可以随时退出。</p>`],
-      register: ["创建你的账户", "注册后 7 天内可领取一次 3–7 天新手券；注册本身不会自动领取。", form(emailField() + passwordField("设置密码") + submit("注册并登录")) + `<div class="auth-links">${SHOW_SMS_AUTH ? route("短信登录 / 注册", "sms") : ""}${route("已有账户，去登录", "login")}</div><p class="auth-footnote">无需邮箱验证码。请填写你能收信的邮箱，找回密码时会向该邮箱发送邮件。</p>`],
+      register: ["创建你的账户", "注册后 7 天内可领取一次 3–7 天新手券；注册本身不会自动领取。", form(nicknameField() + emailField() + passwordField("设置密码") + submit("注册并登录")) + `<div class="auth-links">${SHOW_SMS_AUTH ? route("短信登录 / 注册", "sms") : ""}${route("已有账户，去登录", "login")}</div><p class="auth-footnote">无需邮箱验证码。请填写你能收信的邮箱，找回密码时会向该邮箱发送邮件。</p>`],
+      nickname: ["设置昵称", "昵称将显示在页面右上角，可随时在账户中修改。", form(nicknameField() + submit("保存昵称")) + `<div class="auth-links">${route("返回我的账户", "account")}</div>`],
       forgot: ["找回密码", "填写注册邮箱，我们会向该邮箱发送密码重置链接。", form(emailField() + submit("发送重置邮件")) + `<div class="auth-links">${route("返回邮箱登录", "login")}</div>`],
       reset: ["设置新密码", "重置成功后，原有登录状态将失效，请使用新密码重新登录。", form(passwordField("新密码") + submit("重置密码"))],
       bindEmail: [state.user?.email ? "验证邮箱" : "绑定邮箱", state.user?.email ? "确认邮箱归属。请输入当前邮箱与登录密码，接收确认邮件。" : "添加邮箱与密码登录方式。确认邮件中的链接后生效。", form(emailField() + passwordField(state.user?.email ? "当前密码" : "设置密码", !!state.user?.email) + submit("发送确认邮件")) + `<div class="auth-links">${route("返回我的账户", "account")}</div>`],
@@ -273,20 +278,23 @@
       $("authTitle").textContent = "我的账户";
       $("authDescription").textContent = "同一账户的练习权益在不同设备间保持一致，范文仅保存在当前浏览器。";
       const phoneDetails = SHOW_SMS_AUTH || state.user?.phone ? '<div><dt>手机</dt><dd id="accountPhone"></dd></div>' : "";
-      content.innerHTML = '<dl class="account-details"><div><dt>邮箱</dt><dd id="accountEmail"></dd></div>' + phoneDetails + '<div><dt>练习时长</dt><dd id="accountEntitlement"></dd></div><div><dt>新手奖励</dt><dd id="accountStarter"></dd></div></dl><div id="accountActions" class="account-actions"></div>';
+      content.innerHTML = '<dl class="account-details"><div><dt>昵称</dt><dd id="accountNickname"></dd></div><div><dt>邮箱</dt><dd id="accountEmail"></dd></div>' + phoneDetails + '<div><dt>练习时长</dt><dd id="accountEntitlement"></dd></div><div><dt>新手奖励</dt><dd id="accountStarter"></dd></div></dl><div id="accountActions" class="account-actions"></div>';
+      $("accountNickname").textContent = state.user?.nickname || "尚未设置";
       $("accountEmail").textContent = state.user?.email ? `${state.user.email}${state.user.emailVerified ? " · 已验证" : " · 未验证"}` : "尚未绑定";
       if (SHOW_SMS_AUTH || state.user?.phone) $("accountPhone").textContent = state.user?.phone || "尚未绑定";
       $("accountEntitlement").textContent = hasAccess() ? `${state.entitlement.source === "guest" ? "游客体验" : "有效期"}至 ${expiryLabel()}` : canStartGuest() ? "游客 24 小时体验尚未开始" : "当前无可用时长";
       $("accountStarter").textContent = starterDescription();
       const actions = $("accountActions");
+      actions.innerHTML += '<button type="button" class="button button-primary" data-open-plans>购买时长</button>';
+      actions.innerHTML += route(state.user?.nickname ? "修改昵称" : "设置昵称", "nickname");
       if (canClaim()) {
-        actions.innerHTML += `<button type="button" class="button button-primary" data-open-starter>${drawnDays() ? `领取抽中的 ${drawnDays()} 天` : "抽 3–7 天新手券"}</button><p class="coupon-rules">3、4、5、6、7 天各有 20% 机会，抽奖结果固定，领取即生效。游客剩余时长会一并转入；未开始体验时保留完整 24 小时。每账号、每浏览器限一份新手奖励。</p>`;
+        actions.innerHTML += `<button type="button" class="button button-primary" data-open-starter>${drawnDays() ? `领取抽中的 ${drawnDays()} 天` : "领取新手礼"}</button><p class="coupon-rules">3、4、5、6、7 天各有 20% 机会，抽奖结果固定，领取即生效。游客剩余时长会一并转入；未开始体验时保留完整 24 小时。每账号、每浏览器限一份新手奖励。</p>`;
       }
       actions.innerHTML += route("兑换时长券", "redeem");
       if (!state.user?.email || !state.user.emailVerified) actions.innerHTML += route(state.user?.email ? "验证邮箱" : "绑定邮箱", "bindEmail");
       if (SHOW_SMS_AUTH && !state.user?.phone && (!state.user?.email || state.user.emailVerified)) actions.innerHTML += route("绑定手机号", "bindPhone");
       if (state.user?.email) actions.innerHTML += route("修改密码", "changePassword");
-      actions.innerHTML += '<button type="button" class="auth-text-button" data-open-plans>查看套餐</button><button type="button" class="auth-text-button" data-open-billing-history>订单记录</button><button type="button" class="auth-text-button account-logout" data-logout>退出登录</button>';
+      actions.innerHTML += '<button type="button" class="auth-text-button" data-open-billing-history>订单记录</button><button type="button" class="auth-text-button account-logout" data-logout>退出登录</button>';
       if (SHOW_SMS_AUTH && state.user?.email && !state.user.emailVerified && !state.user.phone) {
         const note = document.createElement("p");
         note.className = "auth-footnote";
@@ -299,17 +307,19 @@
       $("authDescription").textContent = selected[1];
       content.innerHTML = selected[2];
       if (["sms", "login", "register"].includes(next) && !state.user) {
-        content.innerHTML += `<div class="auth-benefits">${pendingStarter ? "" : '<button type="button" class="auth-text-button" data-open-starter>抽 3–7 天新手券</button>'}<div class="auth-links"><button type="button" class="auth-text-button" data-open-redeem>兑换时长券</button><button type="button" class="auth-text-button" data-open-plans>查看套餐</button></div></div>`;
+        content.innerHTML += `<div class="auth-benefits">${pendingStarter ? "" : '<button type="button" class="auth-text-button" data-open-starter>新手礼</button>'}<div class="auth-links"><button type="button" class="auth-text-button" data-open-redeem>兑换时长券</button><button type="button" class="auth-text-button" data-open-plans>查看套餐</button></div></div>`;
       }
       if (next === "bindEmail" && state.user?.email) {
         $("authEmail").value = state.user.email;
         $("authEmail").readOnly = true;
       } else if (pendingEmail && $("authEmail")) $("authEmail").value = pendingEmail;
       if (next === "redeem") $("couponCode").value = pendingCouponCode;
+      if (next === "nickname") $("authNickname").value = state.user?.nickname || "";
       if (["sms", "bindPhone"].includes(next) && state.providers.sms === false) message("短信服务暂不可用，请稍后重试，或使用邮箱登录。", true);
       if (["forgot", "bindEmail"].includes(next) && state.providers.email === false) message("邮件服务暂不可用，请稍后重试。", true);
     }
-    content.querySelectorAll("[data-auth-view]").forEach(button => button.addEventListener("click", () => renderView(button.dataset.authView)));
+    content.querySelectorAll("[data-auth-view]").forEach(button => button.addEventListener("click", () => { smsRegistration = null; renderView(button.dataset.authView); }));
+    content.querySelector("[data-restart-sms]")?.addEventListener("click", () => { smsRegistration = null; renderView("sms"); });
     content.querySelector("[data-send-code]")?.addEventListener("click", () => void sendCode());
     content.querySelector("[data-open-starter]")?.addEventListener("click", openStarterWheel);
     content.querySelector("[data-logout]")?.addEventListener("click", () => void logout());
@@ -355,7 +365,7 @@
     try {
       const data = await request("/api/auth/sms/send", { phone, purpose: view === "bindPhone" ? "bind" : "login" });
       sendUntil = performance.now() + Math.max(60, Number(data.retryAfter) || 60) * 1000;
-      message(data.message || "验证码已提交发送，请查看短信。验证码有效期为 5 分钟。");
+      message(data.message || "验证码已提交发送，请查看短信。验证码有效期为 30 分钟。");
     } catch (error) {
       if (error.retryAfter) sendUntil = performance.now() + Number(error.retryAfter) * 1000;
       message(error.message, true);
@@ -368,14 +378,19 @@
     if (busy || !currentForm?.reportValidity()) return;
     const email = $("authEmail")?.value.trim();
     const password = $("authPassword")?.value;
-    const phone = $("authPhone")?.value.trim();
-    const code = $("authCode")?.value.trim();
+    const phone = view === "sms" && smsRegistration ? smsRegistration.phone : $("authPhone")?.value.trim();
+    const code = view === "sms" && smsRegistration ? smsRegistration.code : $("authCode")?.value.trim();
+    const nickname = $("authNickname")?.value.trim().normalize("NFC");
     const currentView = view;
+    if (["register", "nickname"].includes(currentView) || currentView === "sms" && smsRegistration) {
+      if (!nickname || [...nickname].length > 10 || /[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/u.test(nickname)) { message("请填写 1 至 10 个字的昵称，不能包含控制字符。", true); $("authNickname").focus(); return; }
+    }
     if (email) pendingEmail = email;
     const operations = {
       login: ["/api/auth/login", { email, password }],
-      register: ["/api/auth/register", { email, password }],
-      sms: ["/api/auth/sms/login", { phone, code }],
+      register: ["/api/auth/register", { email, password, nickname }],
+      sms: ["/api/auth/sms/login", { phone, code, ...(smsRegistration ? { nickname } : {}) }],
+      nickname: ["/api/auth/profile", { nickname }],
       forgot: ["/api/auth/password/forgot", { email }],
       reset: ["/api/auth/password/reset", { token: resetToken, password }],
       bindEmail: ["/api/auth/email/bind", { email, password }],
@@ -396,6 +411,7 @@
         operation[1].fingerprint = await fingerprint().catch(() => undefined);
       }
       const data = await request(...operation);
+      if (currentView === "sms") smsRegistration = null;
       if (["login", "register", "sms"].includes(currentView)) {
         if (pendingStarter) {
           pendingStarter = false;
@@ -419,8 +435,13 @@
         await refresh();
         renderView("login", "密码已更新，请使用新密码登录。");
       } else if (currentView === "bindPhone") renderView("account", "手机号已绑定，可用于登录同一账户。");
+      else if (currentView === "nickname") renderView("account", "昵称已保存。");
     } catch (error) {
-      message(error.message, true);
+      if (currentView === "sms" && error.code === "NICKNAME_REQUIRED") {
+        smsRegistration = { phone, code };
+        renderView("sms");
+        $("authNickname").focus();
+      } else message(error.message, true);
       if (error.code === "CSRF_INVALID") await refresh();
     } finally { setBusy(false); }
   }
@@ -528,19 +549,24 @@
   function openStarterRegistration() {
     pendingStarter = !!drawnDays();
     pendingRedeem = false;
-    open("register");
+    open(SHOW_SMS_AUTH ? "sms" : "register");
   }
 
   function openStarterLogin() {
     pendingStarter = !!drawnDays();
     pendingRedeem = false;
-    open("login");
+    open(SHOW_SMS_AUTH ? "sms" : "login");
   }
 
   async function logout() {
     if (busy) return;
     setBusy(true);
-    try { await request("/api/auth/logout", {}); await refresh(); open("login", "已退出登录，当前页面的文章和输入已保留。"); }
+    try {
+      await request("/api/auth/logout", {});
+      await refresh();
+      smsRegistration = null;
+      if (dialog.open) dialog.close();
+    }
     catch (error) { message(error.message, true); }
     finally { setBusy(false); }
   }
@@ -558,8 +584,8 @@
     if (canStartGuest()) { void ensureAccess(); return true; }
     if (unavailable) open(state.user ? "account" : "login", "请恢复与账户服务的连接后再开始练习。");
     else if (guestStartFailed) { guestStartFailed = false; void ensureAccess(); }
-    else if (!state.user) open("login", state.guest?.status === "transferred" ? "游客时长已转入账户，请登录继续练习。" : "免登录体验已结束，登录后可领取新手券或兑换时长券。");
-    else open("account", canClaim() ? "领取新手券即可继续练习，领取后立即开始连续计时。" : "当前没有可用时长，可以兑换渠道时长券。文章和输入会保留。");
+    else if (!state.user) open(SHOW_SMS_AUTH ? "sms" : "login", state.guest?.status === "transferred" ? "请登录后继续练习。" : "游客体验已结束，登录后可领取新手礼或购买时长。");
+    else open("account", canClaim() ? "可领取新手礼或购买时长继续练习，领取后立即开始连续计时。" : "练习时长已结束，可购买时长或兑换时长券继续练习。文章和输入会保留。");
     return false;
   }
 
@@ -599,7 +625,7 @@
     pendingStarter = false;
     if (!state.user) {
       pendingRedeem = true;
-      open("login", "请先登录或注册，再兑换时长券。兑换成功后立即延长账户有效期。");
+      open(SHOW_SMS_AUTH ? "sms" : "login", "请先登录或注册，再兑换时长券。兑换成功后立即延长账户有效期。");
     } else open("redeem");
   }
 
@@ -623,10 +649,11 @@
   }
 
   $("accountButton").addEventListener("click", () => open());
+  $("accessPlans").addEventListener("click", openPlans);
   $("accessRetry").addEventListener("click", accessAction);
   $("plansTrialAction").addEventListener("click", accessAction);
   $("closeAuth").addEventListener("click", () => dialog.close());
-  dialog.addEventListener("close", () => { pendingStarter = false; pendingRedeem = false; });
+  dialog.addEventListener("close", () => { pendingStarter = false; pendingRedeem = false; smsRegistration = null; });
   $("closePlans").addEventListener("click", () => plans.close());
   $("plansDone").addEventListener("click", () => plans.close());
   [dialog, plans].forEach(panel => panel.addEventListener("click", event => {

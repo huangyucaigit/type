@@ -38,7 +38,12 @@ function page(fetchHandler, href = 'http://127.0.0.1:4173/') {
       this.id = id; this.value = ''; this.textContent = ''; this.hidden = false;
       this.open = false; this.disabled = false; this.dataset = {}; this.listeners = new Map();
       this.children = []; this.html = ''; this.attributes = new Map();
-      this.classList = { toggle() {} };
+      const classes = new Set();
+      this.classList = { contains: name => classes.has(name), toggle(name, force) {
+        const enabled = force === undefined ? !classes.has(name) : force;
+        if (enabled) classes.add(name); else classes.delete(name);
+        return enabled;
+      } };
     }
     addEventListener(name, handler) {
       if (!this.listeners.has(name)) this.listeners.set(name, []);
@@ -136,48 +141,31 @@ test('loading and opening the account do not start a guest clock; concurrent pra
   assert.equal(h.get('typingInput').value, 'Learning');
 });
 
-test('the account entry opens email login and visible email flows have no SMS controls or routes', async () => {
+test('the account entry defaults to SMS and email/password stays available as a secondary tab', async () => {
   const h = page(() => response(guestState()));
   await h.auth.ready;
   h.get('accountButton').emit('click');
-  assert.match(h.get('authDescription').textContent, /邮箱与密码/u);
-  assert.match(h.get('authContent').innerHTML, /id="authEmail"/u);
-  assert.match(h.get('authContent').innerHTML, /id="authPassword"/u);
+  assert.match(h.get('authDescription').textContent, /推荐使用短信/u);
+  assert.match(h.get('authContent').innerHTML, /id="authPhone"/u);
+  assert.match(h.get('authContent').innerHTML, /30 分钟/u);
   for (const view of ['login', 'register', 'forgot']) {
     h.auth.open(view);
     assert.match(h.get('authContent').innerHTML, /id="authEmail"/u);
-    assert.doesNotMatch(h.get('authContent').innerHTML, /短信|手机号|data-send-code|data-auth-view="(?:sms|bindPhone)"|id="auth(?:Phone|Code)"/u);
+    if (view === 'register') assert.match(h.get('authContent').innerHTML, /id="authNickname"/u);
   }
   assert.deepEqual(h.calls.map(call => call.url), ['/api/auth/session']);
 });
 
-for (const legacyView of ['sms', 'bindPhone']) {
-  test(`an anonymous legacy ${legacyView} entry falls back to email login without sending SMS`, async () => {
-    const initial = guestState();
-    const signedIn = { ...initial, user: { id: 'student', email: 'student@example.test' } };
-    const h = page(url => response(url === '/api/auth/session' ? initial : signedIn));
-    await h.auth.ready;
-    h.auth.open(legacyView);
-    assert.match(h.get('authDescription').textContent, /邮箱与密码/u);
-    assert.doesNotMatch(h.get('authContent').innerHTML, /data-send-code|id="auth(?:Phone|Code)"/u);
-    h.get('authEmail').value = 'student@example.test';
-    h.get('authPassword').value = 'Password-12345';
-    h.get('authForm').emit('submit');
-    for (let attempt = 0; attempt < 20 && !h.auth.getState().user; attempt++) await flush();
-    assert.equal(h.auth.getState().user.email, 'student@example.test');
-    assert.deepEqual(h.calls.filter(call => call.options.method === 'POST').map(call => call.url), ['/api/auth/login']);
-  });
-}
-
-test('email accounts have no phone-binding prompt and a legacy binding entry returns to the account', async () => {
+test('email accounts can bind phones after email verification and legacy names never leak in the header', async () => {
   for (const emailVerified of [false, true]) {
     const state = { ...guestState(), user: { id: 'student', email: 'student@example.test', emailVerified, phone: null } };
     const h = page(() => response(state));
     await h.auth.ready;
     h.auth.open('account');
-    assert.doesNotMatch(h.get('authContent').innerHTML, /accountPhone|<dt>手机<\/dt>/u);
-    assert.doesNotMatch(h.get('accountActions').innerHTML, /绑定手机号|data-auth-view="(?:sms|bindPhone)"/u);
-    assert.equal(h.get('authContent').children.some(node => /绑定手机号/u.test(node.textContent)), false);
+    assert.match(h.get('authContent').innerHTML, /accountPhone/u);
+    assert.equal(h.get('accountButton').textContent, '练习同学');
+    assert.match(h.get('accountActions').innerHTML, /设置昵称/u);
+    assert.equal(/data-auth-view="bindPhone"/u.test(h.get('accountActions').innerHTML), emailVerified);
     if (!emailVerified) {
       const verify = h.get('accountActions').querySelectorAll('[data-auth-view]').find(button => button.dataset.authView === 'bindEmail');
       assert.ok(verify);
@@ -186,10 +174,97 @@ test('email accounts have no phone-binding prompt and a legacy binding entry ret
       assert.doesNotMatch(h.get('authDescription').textContent, /绑定手机号|短信/u);
     }
     h.auth.open('bindPhone');
-    assert.equal(h.get('authTitle').textContent, '我的账户');
-    assert.doesNotMatch(h.get('authContent').innerHTML, /id="auth(?:Phone|Code)"|data-send-code/u);
+    assert.equal(h.get('authTitle').textContent, '绑定手机号');
+    assert.match(h.get('authContent').innerHTML, /data-send-code/u);
     assert.deepEqual(h.calls.map(call => call.url), ['/api/auth/session']);
   }
+});
+
+test('SMS first registration keeps the verified phone and code in memory until a valid nickname is submitted', async () => {
+  const initial = guestState();
+  const signedIn = { ...initial, user: { id: 'sms-student', nickname: '短信同学', phone: '13341313711', email: null } };
+  let attempts = 0;
+  const h = page(url => url === '/api/auth/sms/login'
+    ? ++attempts === 1 ? response({ code: 'NICKNAME_REQUIRED', error: '请设置昵称。' }, 400) : response(signedIn)
+    : response(initial));
+  await h.auth.ready; h.auth.open();
+  h.get('authPhone').value = '13341313711'; h.get('authCode').value = '123456';
+  h.get('authForm').emit('submit');
+  await waitFor(() => h.get('authTitle').textContent === '设置你的昵称');
+  assert.match(h.get('authContent').innerHTML, /id="authNickname"/u);
+  assert.doesNotMatch(h.get('authContent').innerHTML, /id="authPhone"|id="authCode"/u);
+  h.get('authNickname').value = '超'.repeat(11); h.get('authForm').emit('submit');
+  await flush(); assert.equal(attempts, 1);
+  h.get('authNickname').value = ' 短信同学 '; h.get('authForm').emit('submit');
+  await waitFor(() => h.auth.getState().user);
+  const posts = h.calls.filter(call => call.url === '/api/auth/sms/login').map(call => JSON.parse(call.options.body));
+  assert.equal(posts[0].nickname, undefined);
+  assert.equal(posts[1].nickname, '短信同学');
+  assert.equal(posts[0].phone, posts[1].phone); assert.equal(posts[0].code, posts[1].code);
+  assert.equal(h.get('accountButton').textContent, '短信同学');
+  assert.equal(h.calls.filter(call => call.url === '/api/auth/sms/send').length, 0);
+});
+
+test('existing SMS users log in without a nickname form, and SMS sends show the 30 minute validity and cooldown', async () => {
+  const initial = guestState(), signedIn = { ...initial, user: { id: 'old-sms', nickname: '原昵称', phone: '13341313711' } };
+  const h = page(url => response(url === '/api/auth/sms/send' ? { message: '验证码已发送，30 分钟内有效。', retryAfter: 60 }
+    : url === '/api/auth/sms/login' ? signedIn : initial));
+  await h.auth.ready; h.auth.open();
+  h.get('authPhone').value = '13341313711';
+  h.get('authContent').querySelector('[data-send-code]').emit('click');
+  await waitFor(() => h.get('authMessage').textContent.includes('30 分钟'));
+  h.get('authContent').querySelector('[data-send-code]').emit('click');
+  assert.equal(h.calls.filter(call => call.url === '/api/auth/sms/send').length, 1);
+  h.get('authCode').value = '123456'; h.get('authForm').emit('submit');
+  await waitFor(() => h.auth.getState().user);
+  assert.equal(h.get('accountButton').textContent, '原昵称');
+  assert.equal(JSON.parse(h.calls.find(call => call.url === '/api/auth/sms/login').options.body).nickname, undefined);
+});
+
+test('an uncertain SMS send shows usable-code guidance and waits before allowing another send', async () => {
+  const initial = guestState();
+  const signedIn = {...initial,user:{id:'sms-user',nickname:'短信同学',phone:'13341313711'}};
+  const h = page(url => url === '/api/auth/sms/send' ? response({code:'SMS_SEND_UNCERTAIN',error:'短信发送结果暂未确认，收到验证码可直接登录。',retryAfter:60},503) : response(url === '/api/auth/sms/login' ? signedIn : initial));
+  await h.auth.ready; h.auth.open(); h.get('authPhone').value='13341313711';
+  h.get('authContent').querySelector('[data-send-code]').emit('click');
+  await waitFor(() => h.get('authMessage').textContent.includes('收到验证码可直接登录'));
+  h.get('authContent').querySelector('[data-send-code]').emit('click');
+  assert.equal(h.calls.filter(call=>call.url==='/api/auth/sms/send').length,1);
+  h.get('authCode').value='123456';
+  h.get('authForm').emit('submit');
+  await waitFor(()=>h.auth.getState().user);
+  assert.equal(h.get('accountButton').textContent,'短信同学');
+  assert.equal(h.calls.filter(call=>call.url==='/api/auth/sms/send').length,1);
+});
+
+test('email signup validates nickname before sending and uses the nickname in the header', async () => {
+  const initial = guestState(), signedIn = { ...initial, user: { id: 'mail-student', nickname: '😀'.repeat(10), email: 'mail@example.test' } };
+  const h = page(url => response(url === '/api/auth/register' ? signedIn : initial));
+  await h.auth.ready; h.auth.open('register');
+  h.get('authEmail').value = 'mail@example.test'; h.get('authPassword').value = 'Password-1234';
+  for (const nickname of ['', '超'.repeat(11), '同\u200b学']) {
+    h.get('authNickname').value = nickname; h.get('authForm').emit('submit'); await flush();
+  }
+  assert.equal(h.calls.filter(call => call.url === '/api/auth/register').length, 0);
+  h.get('authNickname').value = '😀'.repeat(10); h.get('authForm').emit('submit');
+  await waitFor(() => h.auth.getState().user);
+  assert.equal(h.get('accountButton').textContent, '😀'.repeat(10));
+  assert.equal(h.get('accountButton').title, '😀'.repeat(10));
+  assert.equal(JSON.parse(h.calls.find(call => call.url === '/api/auth/register').options.body).nickname, '😀'.repeat(10));
+});
+
+test('old accounts can set a nickname and display it without interpolating it into markup', async () => {
+  const initial = { ...guestState(), user: { id: 'legacy', email: 'private@example.test', nickname: null } };
+  const renamed = { ...initial, user: { ...initial.user, nickname: '<b>同学</b>' } };
+  const h = page(url => response(url === '/api/auth/profile' ? renamed : initial));
+  await h.auth.ready; h.auth.open('nickname');
+  assert.equal(h.get('accountButton').textContent, '练习同学');
+  assert.equal(h.get('authNickname').value, '');
+  h.get('authNickname').value = renamed.user.nickname; h.get('authForm').emit('submit');
+  await waitFor(() => h.auth.getState().user.nickname);
+  assert.equal(h.get('accountButton').textContent, renamed.user.nickname);
+  assert.equal(h.get('accountNickname').textContent, renamed.user.nickname);
+  assert.doesNotMatch(h.get('authContent').innerHTML, /<b>同学/u);
 });
 
 test('an uncertain guest POST resolves a granted session without repeating the activation or opening registration', async () => {
@@ -234,7 +309,89 @@ test('the server deadline expires independently of the local wall clock and does
   assert.equal(h.get('typingInput').value, 'Full article draft');
   assert.equal(h.get('sentenceAnswer-1').value, 'Sentence draft');
   assert.match(h.get('accessTitle').textContent, /体验已结束/u);
+  assert.equal(h.get('accessPlans').hidden, true);
   assert.equal(h.get('authDialog').open, false);
+  h.get('accountButton').emit('click');
+  assert.equal(h.get('authDialog').open, true);
+  assert.match(h.get('authContent').innerHTML, /id="authPhone"/);
+});
+
+test('logged-in users can always open plans directly from the toolbar while guests have no purchase button', async () => {
+  for (const active of [true, false]) {
+    const initial = { ...guestState(active), user: { id:'buyer',nickname:'同学' },
+      guest:{status:active?'transferred':'expired'},starter:{status:'claimed'}, entitlement:{hasAccess:active,source:'account',expiresAt:active?NOW+DAY:NOW-1} };
+    let loggedOut=false;
+    const h=page(url=>{if(url==='/api/auth/logout')loggedOut=true;return response(loggedOut?guestState():initial);});
+    await h.auth.ready;
+    assert.equal(h.get('accessPlans').hidden,false);
+    h.get('accessPlans').emit('click');
+    assert.equal(h.get('plansDialog').open,true);
+    assert.equal(h.get('authDialog').open,false);
+    if(!active) assert.equal(h.get('accessTitle').textContent,'练习时长已结束');
+    h.get('plansDialog').close();h.auth.open('account');
+    h.get('accountActions').querySelector('[data-logout]').emit('click');
+    await waitFor(()=>!h.auth.getState().user&&!h.get('authDialog').open);
+    assert.equal(h.get('accessPlans').hidden,true);
+  }
+});
+
+test('four access displays cover unused trials, expiry and hidden transferred guest time', async () => {
+  const guestExpired={...guestState(),guest:{status:'expired',startedAt:NOW-DAY,endsAt:NOW-1},entitlement:{hasAccess:false,expiresAt:NOW-1}};
+  const user={id:'student',nickname:'同学'};
+  const cases=[
+    {state:guestState(true),title:'游客体验',countdown:true,purchase:false},
+    {state:guestExpired,title:'游客体验已结束',countdown:false,purchase:false,expired:true},
+    {state:{...guestExpired,user,starter:{status:'available'}},title:'练习时长已结束',countdown:false,purchase:true,expired:true},
+    {state:{...guestState(true),user,entitlement:{hasAccess:true,source:'account',expiresAt:NOW+DAY}},title:'',countdown:true,purchase:true},
+    {state:{...guestState(true),user},title:'',countdown:true,purchase:true},
+    {state:guestState(),title:'免费体验 24 小时',countdown:false,purchase:false},
+    {state:{...guestState(),user},title:'免费体验 24 小时',countdown:false,purchase:true},
+    ...[null,NOW-1,NOW+DAY].map(endsAt=>({state:{...guestState(),guest:{status:'transferred',endsAt},entitlement:{hasAccess:false,expiresAt:endsAt}},title:'',countdown:false,purchase:false,summaryHidden:true})),
+  ];
+  for(const item of cases){
+    const h=page(()=>response(item.state));await h.auth.ready;
+    assert.equal(h.get('accessTitle').textContent,item.title);
+    assert.equal(!h.get('accessCountdown').hidden,item.countdown,item.title);
+    assert.equal(!h.get('accessPlans').hidden,item.purchase,item.title);
+    assert.equal(h.get('accessSummary').hidden,!!item.summaryHidden);
+    assert.equal(h.get('accessTitle').hidden,!item.title);
+    assert.equal(h.get('accessStatus').classList.contains('is-expired'),!!item.expired);
+    assert.equal(h.get('accessRetry').hidden,true);
+    assert.equal(h.get('shareButton').hidden,false);
+    if(item.summaryHidden)assert.equal(h.get('accessStatus').title,'');
+    assert.equal(h.get('authDialog').open,false);
+    if(!item.state.user)assert.equal(h.get('accountButton').textContent,'登录 / 注册');
+  }
+});
+
+test('hidden guest time restores on login and connection errors remain visible until retry succeeds', async () => {
+  const transferred={...guestState(),guest:{status:'transferred',endsAt:NOW+DAY},entitlement:{hasAccess:false,expiresAt:NOW+DAY}};
+  let current=transferred,fail=false;
+  const h=page(()=>fail?response({error:'offline'},503):response(current));
+  await h.auth.ready;
+  assert.equal(h.get('accessSummary').hidden,true);
+  fail=true;
+  await h.auth.refresh();
+  assert.equal(h.get('accessSummary').hidden,false);
+  assert.equal(h.get('accessTitle').textContent,'暂时无法获取状态');
+  assert.equal(h.get('accessRetry').hidden,false);
+  assert.equal(h.get('accessStatus').classList.contains('is-expired'),false);
+  fail=false;
+  h.get('accessRetry').emit('click');
+  await waitFor(()=>h.get('accessSummary').hidden);
+  current={...transferred,user:{id:'student',nickname:'同学'},entitlement:{hasAccess:true,source:'account',expiresAt:NOW+DAY}};
+  await h.auth.refresh();
+  assert.equal(h.get('accountButton').textContent,'同学');
+  assert.equal(h.get('accessSummary').hidden,false);
+  assert.equal(h.get('accessTitle').hidden,true);
+  assert.equal(h.get('accessCountdown').hidden,false);
+  assert.equal(h.get('accessPlans').hidden,false);
+  h.advance(DAY+1);
+  assert.equal(h.get('accessTitle').hidden,false);
+  assert.equal(h.get('accessTitle').textContent,'练习时长已结束');
+  assert.equal(h.get('accessCountdown').hidden,true);
+  assert.equal(h.get('accessStatus').classList.contains('is-expired'),true);
+  assert.equal(h.get('authDialog').open,false);
 });
 
 test('an older session GET cannot replace a successful starter coupon grant', async () => {
@@ -293,6 +450,8 @@ for (const mode of ['register', 'login']) {
     await h.auth.ready;
     if (mode === 'login') h.auth.openStarterLogin();
     else h.auth.openStarterRegistration();
+    h.auth.open(mode);
+    h.get('authNickname').value = '练习同学';
     h.get('authEmail').value = 'new@example.test'; h.get('authPassword').value = 'Password-12345';
     h.get('authForm').emit('submit');
     await waitFor(() => h.auth.hasAccess());
@@ -312,6 +471,7 @@ test('ordinary registration does not automatically claim a pending draw, and clo
   h.auth.openStarterRegistration();
   h.get('authDialog').close(); h.get('authDialog').emit('close');
   h.auth.open('register');
+  h.get('authNickname').value = '练习同学';
   h.get('authEmail').value = 'new@example.test'; h.get('authPassword').value = 'Password-12345';
   h.get('authForm').emit('submit');
   await waitFor(() => h.auth.getState().user);
@@ -327,6 +487,7 @@ test('logging into an account which already claimed never submits another grant 
   const h = page(url => response(url === '/api/auth/session' ? initial : signedIn));
   await h.auth.ready;
   h.auth.openStarterLogin();
+  h.auth.open('login');
   h.get('authEmail').value = 'existing@example.test'; h.get('authPassword').value = 'Password-12345';
   h.get('authForm').emit('submit');
   for (let attempt = 0; attempt < 20 && !h.auth.getState().user; attempt++) await flush();
@@ -350,6 +511,7 @@ test('an invitation records server attribution before registration without start
   assert.equal(h.auth.getState().guest.startedAt, null);
   assert.equal(h.get('authDialog').open, false);
   h.auth.open('register');
+  h.get('authNickname').value = '练习同学';
   h.get('authEmail').value = 'invited@example.test'; h.get('authPassword').value = 'Password-12345';
   h.get('authForm').emit('submit');
   await waitFor(() => h.auth.getState().user);
@@ -369,6 +531,7 @@ test('a failed invitation visit retries before registering and never silently lo
   await h.auth.ready;
   assert.match(h.window.location.href, /ref=/u);
   h.auth.open('register');
+  h.get('authNickname').value = '练习同学';
   h.get('authEmail').value = 'retry@example.test'; h.get('authPassword').value = 'Password-12345';
   h.get('authForm').emit('submit');
   await waitFor(() => h.auth.getState().user);
