@@ -145,3 +145,5 @@ python -m unittest discover -s tests -p test_deploy_release.py -v
 独立翻译与学习支持本地 JSON 提取、一次自动重试及纯文本降级，详见 [结构化结果兜底](docs/ANALYSIS_RECOVERY.md)。
 
 学习助手内置六个按引用推荐的快捷提问，支持保留草稿、继续学习及“更多”展开，详见 [快捷提问设计与验收](docs/ASSISTANT_QUICK_QUESTIONS.md)。
+
+分句模式草稿输入框支持与范文相同的“添加到助手 / 翻译与学习 / 整句”选区入口，详见 [分句草稿选区学习](docs/SENTENCE_INPUT_LEARNING.md)。

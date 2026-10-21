@@ -291,6 +291,13 @@ function createPage({ source = 'First sentence. Second sentence! Third sentence?
       await document.emit('selectionchange');
     },
     async type(index, text) { const answer = group(index).answer; answer.value = text; await answer.emit('input'); },
+    async selectAnswer(index, start, end) {
+      const answer = group(index).answer;
+      nativeSelection = null;
+      document.activeElement = answer;
+      answer.setSelectionRange(start, end);
+      await answer.emit('select');
+    },
     async realType(text) {
       $('typingInput').value = text;
       $('typingInput').setSelectionRange(text.length, text.length);
@@ -1338,6 +1345,72 @@ async function learningPage(source, fetcher) {
   return Object.assign(page, { requests });
 }
 
+test('sentence draft learning remains available with the reference hidden and preserves draft and stopwatch', async () => {
+  const page = await learningPage('An entirely different reference. Another group.');
+  const draft = 'My own wording makes progress. Another thought.';
+  await page.type(0, draft);
+  await page.fire('hideAllReferences', 'click');
+  await page.fire('sentenceTimerStart', 'click');
+  page.tick(2100);
+  await page.selectAnswer(0, draft.indexOf('wording'), draft.indexOf('wording') + 7);
+  assert.equal(page.requests.length, 0);
+  assert.equal(page.$('selectionLearnAction').hidden, false);
+  await page.learnSelection(page.group(0).answer);
+  assert.equal(page.requests.length, 1);
+  assert.equal(page.requests[0].text, 'wording');
+  assert.deepEqual(page.requests[0].context, { sentence: 'My own wording makes progress.', paragraph: draft });
+  assert.equal(page.group(0).answer.value, draft);
+  assert.equal(page.group(0).reference.hidden, true);
+  assert.equal(page.group(0).checked.hidden, true);
+  assert.equal(page.$('sentenceTimerState').textContent, '计时中');
+  assert.equal(page.$('sentenceTimerValue').textContent, '00:02');
+  assert.equal(page.$('typingInput').value, '');
+});
+
+test('draft learning sources exclude checked, folded, composing and inactive inputs', async () => {
+  const page = createPage();
+  const first = page.group(0).answer;
+  assert.equal(page.controller.getLearningInputs().length, 3);
+  await page.fire('hideAllReferences', 'click');
+  assert.equal(page.controller.getLearningInputs().length, 3);
+  await page.type(0, 'My draft.');
+  await page.click(page.group(0).check);
+  assert.ok(!page.controller.getLearningInputs().some(entry => entry.input === first));
+  await page.click(page.group(0).edit);
+  assert.ok(page.controller.getLearningInputs().some(entry => entry.input === first));
+  await page.click(page.group(0).collapse);
+  assert.ok(!page.controller.getLearningInputs().some(entry => entry.input === first));
+  await page.group(1).answer.emit('compositionstart');
+  assert.equal(page.controller.getLearningInputs().length, 1);
+  page.controller.setActive(false);
+  assert.equal(page.controller.getLearningInputs().length, 0);
+  page.controller.setActive(true);
+  page.controller.reset();
+  assert.ok(!page.controller.getLearningInputs().some(entry => entry.input === first));
+});
+
+test('folding, regrouping, checking, editing and mode changes invalidate in-flight draft analysis', async () => {
+  for (const action of [
+    page => page.click(page.group(0).collapse),
+    page => page.size(2),
+    page => page.click(page.group(0).check),
+    page => page.type(0, 'A changed draft.'),
+    page => page.fire('realtimeModeButton', 'click'),
+  ]) {
+    const pending = deferred();
+    const page = await learningPage('Reference one. Reference two.', () => pending.promise);
+    await page.type(0, 'My personal draft.');
+    await page.selectAnswer(0, 3, 11);
+    const work = page.learnSelection(page.group(0).answer);
+    assert.equal(page.requests.length, 1);
+    await action(page);
+    pending.resolve(analyzed('旧结果不得显示。'));
+    await work;
+    assert.equal(page.$('selectionTranslationPopup').hidden, true);
+    assert.equal(page.$('selectionTranslationText').textContent, '');
+  }
+});
+
 test('sentence references share contextual IELTS analysis only after an explicit learning action without changing practice', async () => {
   const source = 'We make progress through practice. Daily effort helps learners.';
   const page = await learningPage(source);
@@ -1411,7 +1484,7 @@ test('grouped selections map emoji, joined whitespace and cross-paragraph spans 
   assert.equal(page.requests[2].context.paragraph, source);
 });
 
-test('answers, checked results, Chinese panels, cross-group and hidden references never start learning requests', async () => {
+test('checked results, Chinese panels, cross-group and hidden references never start learning requests', async () => {
   const page = await learningPage('First English sentence. Second English sentence.');
   const first = page.group(0), second = page.group(1);
   await page.click(first.toggle);
@@ -1420,7 +1493,6 @@ test('answers, checked results, Chinese panels, cross-group and hidden reference
   assert.equal(page.requests.length, 0);
   await page.type(0, 'My English answer');
   first.answer.setSelectionRange(0, first.answer.value.length);
-  await page.learnSelection(first.answer);
   await page.click(first.check);
   await page.select(first.checked);
   await page.learnSelection(first.checked);

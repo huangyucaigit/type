@@ -139,16 +139,38 @@ function createPage({ protocol = 'http:', fetcher, source = '', optionalUI = tru
   let active = true;
   let primaryActive = true;
   const additionalSources = [];
+  const additionalInputs = [];
   const context = vm.createContext(window);
   vm.runInContext(fs.readFileSync(path.join(__dirname, '..', 'sentence-core.js'), 'utf8'), context);
   vm.runInContext(fs.readFileSync(path.join(__dirname, '..', 'selection-translation.js'), 'utf8'), context);
   const controller = window.SelectionTranslation.create({ ...elements, isActive: () => active, getReferenceText: () => source,
-    isPrimaryActive: () => primaryActive, getAdditionalSources: () => additionalSources, onAddToAssistant });
+    isPrimaryActive: () => primaryActive, getAdditionalSources: () => additionalSources,
+    getAdditionalInputs: () => additionalInputs, onAddToAssistant });
   return {
     ...elements, document, window, controller, requests,
     active(value) { active = value; },
     primaryActive(value) { primaryActive = value; },
     reference(value) { source = value; },
+    addInput(text) {
+      const field = new Element();
+      const area = new Element();
+      field.id = `answer-${additionalInputs.length}`;
+      field.value = text;
+      field.setSelectionRange = (start, end) => { field.selectionStart = start; field.selectionEnd = end; };
+      area.append(field);
+      const entry = { input: field, area };
+      additionalInputs.push(entry);
+      return entry;
+    },
+    removeInput(entry) { additionalInputs.splice(additionalInputs.indexOf(entry), 1); },
+    selectAdditionalInput(entry, start = 0, end = entry.input.value.length, native = false) {
+      const field = entry.input;
+      field.setSelectionRange(start, end);
+      document.activeElement = field;
+      nativeSelection = native ? { isCollapsed: false, rangeCount: 1, anchorNode: field, focusNode: field,
+        toString: () => field.value.slice(field.selectionStart, field.selectionEnd) } : null;
+      return document.emit('select', { target: field });
+    },
     addSource(text, { article = text, offset = 0, mapRange, id } = {}) {
       const display = new Element();
       const area = new Element();
@@ -314,6 +336,121 @@ function deferred() {
   const promise = new Promise(done => { resolve = done; });
   return { promise, resolve: text => resolve({ ok: true, json: async () => analysisResponse(text) }) };
 }
+
+test('sentence draft selection reuses explicit learning and sends its own exact text and context', async () => {
+  const page = createPage({ source: 'An entirely different reference essay.' });
+  page.primaryActive(false);
+  const value = 'First 😀 sentence.  My own progress feels steady. Last thought.';
+  const entry = page.addInput(value);
+  const start = value.indexOf('progress');
+  await page.selectAdditionalInput(entry, start, start + 8, true);
+  assert.equal(page.learnAction.hidden, false);
+  assert.equal(page.learnButton.textContent, '翻译与学习 · 单词');
+  assert.equal(page.sentenceButton.hidden, false);
+  assert.equal(page.requests.length, 0);
+  await page.learnButton.emit('click');
+  assert.equal(page.requests.length, 1);
+  assert.equal(page.requests[0].url, '/api/analyze');
+  assert.equal(page.requests[0].text, 'progress');
+  assert.equal(page.requests[0].context.sentence, 'My own progress feels steady.');
+  assert.equal(page.requests[0].context.paragraph, value);
+  assert.equal(entry.input.value, value);
+  assert.equal(entry.input.selectionStart, start);
+  assert.equal(entry.input.selectionEnd, start + 8);
+});
+
+test('whole-sentence learning expands the selected draft occurrence without touching the realtime input', async () => {
+  const page = createPage();
+  page.primaryActive(false);
+  const value = 'Make progress. Make progress. Final thought.';
+  const entry = page.addInput(value);
+  const start = value.lastIndexOf('progress');
+  await page.selectAdditionalInput(entry, start, start + 8);
+  await page.sentenceButton.emit('click');
+  assert.equal(page.requests.length, 1);
+  assert.equal(page.requests[0].text, 'Make progress.');
+  assert.equal(entry.input.selectionStart, 15);
+  assert.equal(entry.input.selectionEnd, 29);
+  assert.equal(entry.input.value, value);
+  assert.equal(page.input.value, '');
+});
+
+test('adding a touched sentence draft to assistant uses the same saved selection without requesting AI', async () => {
+  const selected = [];
+  const page = createPage({ touchPoints: 1, assistantUI: true, onAddToAssistant: value => selected.push(value) });
+  page.primaryActive(false);
+  const entry = page.addInput('My personal wording is clear.');
+  await page.selectAdditionalInput(entry, 12, 19);
+  await page.assistantButton.emit('pointerdown', { pointerType: 'touch', button: 0 });
+  page.document.activeElement = page.assistantButton;
+  entry.input.setSelectionRange(19, 19);
+  await page.document.emit('selectionchange');
+  await page.assistantButton.emit('click');
+  assert.equal(selected.length, 1);
+  assert.equal(selected[0].text, 'wording');
+  assert.equal(selected[0].context.sentence, 'My personal wording is clear.');
+  assert.equal(page.requests.length, 0);
+  assert.equal(page.popup.hidden, true);
+});
+
+test('changed, folded, hidden and removed draft sources cannot apply stale learning results', async () => {
+  for (const invalidate of [
+    (page, entry) => { entry.input.value = 'Replacement draft.'; },
+    (page, entry) => { entry.area.hidden = true; },
+    (page, entry) => { entry.input.hidden = true; },
+    (page, entry) => page.removeInput(entry),
+    page => page.active(false),
+  ]) {
+    const pending = deferred();
+    const page = createPage({ fetcher: () => pending.promise });
+    page.primaryActive(false);
+    const entry = page.addInput('My original draft.');
+    await page.selectAdditionalInput(entry, 3, 11);
+    const request = page.learnButton.emit('click');
+    invalidate(page, entry);
+    await page.document.emit('selectionchange');
+    pending.resolve('This old answer must not reappear.');
+    await request;
+    assert.equal(page.popup.hidden, true);
+    assert.equal(page.translationLabel.textContent, '');
+  }
+});
+
+test('keyboard selection, mouse positioning and typing invalidation work for additional textareas', async () => {
+  const page = createPage();
+  page.primaryActive(false);
+  const entry = page.addInput('My practice gets better.');
+  entry.input.rect = { left: 100, right: 700, top: 80, bottom: 500, width: 600, height: 420 };
+  await page.document.emit('pointerdown', { target: entry.input, pointerType: 'mouse', button: 0, clientX: 150, clientY: 180 });
+  await page.selectAdditionalInput(entry, 3, 11);
+  assert.equal(page.learnAction.hidden, true);
+  await page.document.emit('pointerup', { target: entry.input, pointerType: 'mouse', clientX: 300, clientY: 180 });
+  assert.equal(page.learnAction.hidden, false);
+  assert.equal(page.learnAction.style.left, '300px');
+  await page.document.emit('beforeinput', { target: entry.input });
+  assert.equal(page.learnAction.hidden, true);
+  await page.document.emit('keydown', { target: entry.input, shiftKey: true, key: 'ArrowRight' });
+  await page.document.emit('keyup', { target: entry.input, shiftKey: true });
+  assert.equal(page.learnAction.hidden, false);
+  assert.equal(page.requests.length, 0);
+});
+
+test('unrelated document selection and non-English drafts cannot reuse a retained textarea selection', async () => {
+  const page = createPage();
+  page.primaryActive(false);
+  const entry = page.addInput('My practice gets better.');
+  await page.selectAdditionalInput(entry, 3, 11);
+  await page.outsideSelection('Outside selected English.');
+  page.document.activeElement = entry.input;
+  await page.document.emit('selectionchange');
+  assert.equal(page.learnAction.hidden, true);
+  for (const value of ['   ', '1234', '中文']) {
+    entry.input.value = value;
+    await page.selectAdditionalInput(entry);
+    assert.equal(page.learnAction.hidden, true);
+  }
+  assert.equal(page.requests.length, 0);
+});
 
 test('selecting or releasing a phrase alone never opens the popup or requests translation', async () => {
   const page = createPage();

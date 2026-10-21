@@ -9,7 +9,7 @@
     retryButton, closeButton, typeLabel, briefContainer, detailsContainer, expandButton, learnAction, learnButton, sentenceButton,
     assistantButton, onAddToAssistant = null,
     getReferenceText = () => "", isActive = () => true,
-    isPrimaryActive = () => true, getAdditionalSources = () => [] }) {
+    isPrimaryActive = () => true, getAdditionalSources = () => [], getAdditionalInputs = () => [] }) {
     const cache = new Map();
     const sourceIds = new WeakMap();
     let sourceSequence = 0;
@@ -63,8 +63,24 @@
       try { return String(source.getReferenceText?.() || ""); } catch { return ""; }
     }
 
+    function additionalInputs() {
+      if (!isActive()) return [];
+      try {
+        const inputs = getAdditionalInputs();
+        return Array.isArray(inputs) ? inputs.filter(source => source?.input
+          && visibleSource({ display: source.input, area: source.area || source.input })) : [];
+      } catch { return []; }
+    }
+
+    const selectedInput = selected => selected?.kind === "additional-input" ? selected.sourceInput
+      : selected?.kind === "input" ? input : null;
+
     function sourceAvailable(selected) {
       if (!selected || !isActive()) return false;
+      if (selected.kind === "additional-input") {
+        return additionalInputs().some(source => source.input === selected.sourceInput)
+          && String(selected.sourceInput.value || "") === selected.inputValue;
+      }
       if (selected.kind === "additional") {
         return additionalSources().some(source => source.display === selected.sourceDisplay
           && localReference(source) === selected.localReference);
@@ -251,6 +267,25 @@
     function selection() {
       if (!isActive()) return null;
       const selected = typeof window.getSelection === "function" ? window.getSelection() : null;
+      const focused = additionalInputs().find(source => source.input === document.activeElement);
+      if (focused) {
+        const field = focused.input;
+        const value = String(field.value || "");
+        const { selectionStart: start, selectionEnd: end } = field;
+        if (Number.isInteger(start) && Number.isInteger(end) && start >= 0 && end > start && end <= value.length) {
+          const raw = value.slice(start, end);
+          // Browsers may expose textarea selection as a document Range too.
+          // Do not mistake an unrelated page selection for the retained input range.
+          const outside = selected && !selected.isCollapsed && selected.rangeCount
+            && !contains(field, selected.anchorNode) && !contains(field, selected.focusNode);
+          if (!outside && raw.trim()) {
+            const result = withContext({ text: raw.trim(), kind: "additional-input", sourceInput: field,
+              inputValue: value, area: focused.area || field }, raw, start, end, value);
+            result.key = `${sourceIdentity(field)}:${result.key}`;
+            return result;
+          }
+        }
+      }
       if (selected && !selected.isCollapsed && selected.rangeCount) {
         for (const source of additionalSources()) {
           const scoped = scopedSelection(selected, source.display);
@@ -332,10 +367,11 @@
       if (typeof source !== "string" || source.slice(selected.start, selected.end) !== selected.text) return null;
       const span = window.SentenceCore?.sentenceRanges?.(source)?.find(part => part.start <= selected.start && part.end >= selected.end);
       if (!span || span.text.length > MAX_TEXT_LENGTH || span.text === selected.text || !/[A-Za-z]/.test(span.text)) return null;
-      if (selected.kind === "input") {
-        const value = String(input.value || "");
-        if (value.slice(span.start, span.end) !== span.text || typeof input.setSelectionRange !== "function") return null;
-        return { ...span, input: true };
+      const field = selectedInput(selected);
+      if (field) {
+        const value = String(field.value || "");
+        if (value.slice(span.start, span.end) !== span.text || typeof field.setSelectionRange !== "function") return null;
+        return { ...span, input: field };
       }
       const sourceDisplay = selected.kind === "additional" ? selected.sourceDisplay : display;
       const range = sourceRange(sourceDisplay, span.start, span.end, selected.kind === "display" ? source : null);
@@ -488,8 +524,9 @@
           }
           rect = rects[Math.min(selected.actionAnchor.index, rects.length - 1)];
         }
-        if (selected.kind === "input" && selectionPoint) {
-          const inputRect = input?.getBoundingClientRect?.();
+        const field = selectedInput(selected);
+        if (field && selectionPoint) {
+          const inputRect = field.getBoundingClientRect?.();
           if (inputRect) {
             selected.actionAnchor ||= { inputX: Math.max(0, Math.min(inputRect.width, selectionPoint.x - inputRect.left)),
               inputY: Math.max(0, Math.min(inputRect.height, selectionPoint.y - inputRect.top)) };
@@ -498,7 +535,7 @@
             rect = { left, right: left, top, bottom: top, width: 0, height: 0 };
           }
         }
-        rect ||= (selected.kind === "input" ? input : selected.area || area)?.getBoundingClientRect?.();
+        rect ||= (field || selected.area || area)?.getBoundingClientRect?.();
         if (!rect) return;
         const margin = 12, gap = 10;
         learnAction.hidden = rect.bottom < view.top || rect.top > view.bottom || rect.right < view.left || rect.left > view.right;
@@ -540,7 +577,7 @@
       let rect = current.rect || null;
       try { rect = current.range?.getBoundingClientRect() || rect; } catch { /* Fall back to the input region. */ }
       if (!rect || (!rect.width && !rect.height && rect.top === 0 && rect.left === 0)) {
-        rect = (current.kind === "input" ? input : current.area || area)?.getBoundingClientRect?.();
+        rect = (selectedInput(current) || current.area || area)?.getBoundingClientRect?.();
       }
       if (!rect) return;
       const view = viewport();
@@ -723,6 +760,12 @@
 
     listen(document, "selectionchange", inspect);
     listen(input, "select", inspect);
+    listen(document, "select", event => {
+      if (additionalInputs().some(source => source.input === event.target)) inspect();
+    }, true);
+    listen(document, "keyup", event => {
+      if (!event.isComposing && additionalInputs().some(source => source.input === event.target)) inspect();
+    });
     // Native word/paragraph selection stays local. Only the explicit action
     // below can request AI, so a third click can still extend a word to a paragraph.
     listen(display, "dblclick", inspect);
@@ -739,12 +782,14 @@
       popupEngaged = false;
       const sources = additionalSources();
       const onSource = (isPrimaryActive() && (contains(display, event.target) || contains(input, event.target)))
-        || sources.some(source => contains(source.display, event.target));
+        || sources.some(source => contains(source.display, event.target))
+        || additionalInputs().some(source => contains(source.input, event.target));
       selectingWithMouse = onSource && !touchPointer(event) && (event.button === undefined || event.button === 0);
       selectionPoint = Number.isFinite(event.clientX) && Number.isFinite(event.clientY) ? { x: event.clientX, y: event.clientY } : null;
       hideAction();
       if ((isPrimaryActive() && contains(area, event.target))
-        || sources.some(candidate => contains(candidate.area || candidate.display, event.target))) {
+        || sources.some(candidate => contains(candidate.area || candidate.display, event.target))
+        || additionalInputs().some(source => contains(source.input, event.target))) {
         dismissedKey = null;
       } else close();
     });
@@ -775,11 +820,15 @@
     listen(document, "keydown", (event) => {
       if (event.key === "Escape") close();
       else if (event.shiftKey && ((isPrimaryActive() && contains(area, event.target))
-        || additionalSources().some(source => contains(source.area || source.display, event.target)))) dismissedKey = null;
+        || additionalSources().some(source => contains(source.area || source.display, event.target))
+        || additionalInputs().some(source => contains(source.input, event.target)))) dismissedKey = null;
     });
     listen(input, "input", () => close());
     listen(input, "beforeinput", () => close());
     listen(input, "compositionstart", () => close());
+    for (const name of ["input", "beforeinput", "compositionstart"]) listen(document, name, event => {
+      if (additionalInputs().some(source => source.input === event.target) || current?.sourceInput === event.target) close();
+    }, true);
     const reposition = () => { position(); positionAction(); };
     listen(window, "resize", reposition);
     listen(window, "scroll", reposition, true);
@@ -833,8 +882,8 @@
       const target = sentenceTarget(selected);
       if (!target) { hideAction(); return; }
       if (target.input) {
-        input.focus?.({ preventScroll: true });
-        input.setSelectionRange(target.start, target.end);
+        target.input.focus?.({ preventScroll: true });
+        target.input.setSelectionRange(target.start, target.end);
       } else {
         const native = window.getSelection?.();
         if (!native?.removeAllRanges || !native.addRange) { hideAction(); return; }

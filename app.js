@@ -190,6 +190,7 @@
     onAddToAssistant: window.LearningAssistant ? selected => window.LearningAssistant.addSelection(selected) : null,
     getReferenceText: () => source,
     getAdditionalSources: () => activeMode === "sentence" ? sentencePractice?.getLearningSources() || [] : [],
+    getAdditionalInputs: () => activeMode === "sentence" ? sentencePractice?.getLearningInputs() || [] : [],
     isPrimaryActive: () => activeMode === "realtime",
     isActive: () => canPractice() && !dialog.open && !historyDialog.open && !window.ZijianAuth?.isDialogOpen(),
   });

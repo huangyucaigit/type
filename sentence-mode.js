@@ -911,6 +911,10 @@
         if (active) restoreVisibleScroll();
         if (!active) items.filter(item => item.reviewPending).forEach(item => edit(item, false));
       },
+      getLearningInputs() {
+        return items.filter(item => active && !item.collapsed && !item.answer.hidden && !item.composing)
+          .map(item => ({ input: item.answer, area: item.answer }));
+      },
       getLearningSources() {
         return items.filter(item => !item.collapsed && !item.reference.hidden).map(item => ({
           display: item.reference,
