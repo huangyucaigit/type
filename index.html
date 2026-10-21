@@ -35,6 +35,8 @@
   <script src="floating-timer.js" defer></script>
   <script src="reference-selection.js" defer></script>
   <script src="selection-translation.js" defer></script>
+  <script src="assistant-history.js" defer></script>
+  <script src="assistant-bridge.js" defer></script>
   <script src="app.js" defer></script>
 </head>
 <body class="practice-page">
@@ -69,6 +71,7 @@
             导入范文
           </button>
           <button id="historyButton" class="button button-secondary" type="button" aria-haspopup="dialog" aria-controls="historyDialog">最近范文</button>
+          <button id="assistantToggle" class="button button-secondary" type="button" aria-expanded="false" aria-controls="learningAssistantPanel" title="学习助手 Ctrl / ⌘ + I">学习助手</button>
           <button id="restartButton" class="button button-secondary" type="button">
             <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 10a8 8 0 1 1 1 7M4 4v6h6"/></svg>
             重新练习
@@ -105,7 +108,7 @@
 
         <div class="paper-divider"></div>
         <p id="typingInstructions" class="sr-only">点击文章开始输入。大小写、标点、空格和换行均需一致。</p>
-        <p id="translationSelectionHelp" class="sr-only">电脑双击选词、拖选文字或连续三击选段后，点击选区旁的“翻译与学习”；手机或 iPad 长按选中英文后点击同名按钮。仅选中文字不会请求 AI。</p>
+        <p id="translationSelectionHelp" class="sr-only">电脑双击选词、拖选文字或连续三击选段后，点击选区旁的“翻译与学习”；手机或 iPad 长按选中英文后点击同名按钮。也可以点击“添加到助手”或按 Ctrl / ⌘ + I，准备引用后再提问。仅选中文字或添加引用不会请求 AI。</p>
         <div id="typingArea" class="typing-area">
           <div id="textDisplay" class="typing-text" lang="en" tabindex="0" role="document" aria-label="英文范文与输入状态" aria-describedby="typingInstructions translationSelectionHelp"></div>
           <label class="sr-only" for="typingInput">英文打字练习输入区</label>
@@ -181,9 +184,9 @@
     </main>
   </div>
 
-  <aside id="floatingTimer" class="floating-timer" aria-label="练习秒表" data-collapsed="false">
-    <div id="timerExpanded" class="timer-expanded">
-    <button id="timerCollapse" class="timer-collapse" type="button" aria-label="收起秒表" aria-expanded="true" aria-controls="timerExpanded" title="收起秒表"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m9 6 6 6-6 6"/></svg></button>
+  <aside id="floatingTimer" class="floating-timer" aria-label="练习秒表" data-collapsed="true">
+    <div id="timerExpanded" class="timer-expanded" hidden inert>
+    <button id="timerCollapse" class="timer-collapse" type="button" aria-label="收起秒表" aria-expanded="false" aria-controls="timerExpanded" title="收起秒表"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m15 6-6 6 6 6"/></svg></button>
     <div id="timerDisplay" class="timer-display" aria-label="全文模式秒表">
       <span class="timer-label">练习秒表 · 全文</span>
       <span id="timerValue" class="timer-value">00:00</span>
@@ -203,11 +206,11 @@
       </div>
     </div>
     </div>
-    <button id="timerExpand" class="timer-edge-tab" type="button" aria-label="展开全文模式秒表，未开始" aria-expanded="false" aria-controls="timerExpanded" data-running="false" hidden>
+    <button id="timerExpand" class="timer-edge-tab" type="button" aria-label="展开全文模式秒表，未开始" aria-expanded="false" aria-controls="timerExpanded" data-running="false">
       <span id="timerCompactDot" class="timer-edge-dot" aria-hidden="true" hidden></span>
       <span id="timerCompactIcon" class="timer-edge-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M9 3h6m-3 0v3m6 1 2-2M12 10v5"/><circle cx="12" cy="14" r="8"/></svg></span>
       <span id="timerCompactValue" class="timer-edge-value" aria-hidden="true" hidden>00:00</span>
-      <svg class="timer-edge-arrow" viewBox="0 0 24 24" aria-hidden="true"><path d="m15 6-6 6 6 6"/></svg>
+      <svg class="timer-edge-arrow" viewBox="0 0 24 24" aria-hidden="true"><path d="m9 6 6 6-6 6"/></svg>
     </button>
   </aside>
 
@@ -253,7 +256,9 @@
     <div class="dialog-footer"><button id="plansTrialAction" class="button button-primary" type="button">注册领 3–7 天</button><button id="plansDone" class="button button-secondary" type="button">知道了</button></div>
   </dialog>
 
+  <div id="learningAssistantRoot"></div>
   <div id="selectionLearnAction" class="selection-learn-action" role="group" aria-label="选区翻译与学习" hidden>
+    <button id="selectionAssistantButton" class="button button-secondary selection-learn-button selection-assistant-button" type="button" aria-controls="learningAssistantPanel" title="添加引用后再向助手提问 · Ctrl / ⌘ + I">添加到助手</button>
     <button id="selectionLearnButton" class="button button-primary selection-learn-button" type="button" aria-haspopup="dialog" aria-controls="selectionTranslationPopup">翻译与学习</button>
     <button id="selectionSentenceButton" class="button button-primary selection-learn-button selection-sentence-button" type="button" aria-label="翻译与学习当前选区所在的整句" aria-haspopup="dialog" aria-controls="selectionTranslationPopup" title="学习当前选区所在的完整句子" hidden>整句</button>
   </div>
@@ -284,7 +289,7 @@
       <h2 id="historyTitle">最近范文 <span id="historyCount" class="history-count">0 / 10 篇</span></h2>
       <button id="closeHistory" class="icon-button" type="button" aria-label="关闭最近范文"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m6 6 12 12M18 6 6 18"/></svg></button>
     </div>
-    <p id="historyDescription" class="dialog-description">保留最近导入的 10 篇，超出后移除最早导入的一篇。仅保存在当前浏览器。载入范文会恢复这篇文章的练习进度，秒表重新计时。</p>
+    <p id="historyDescription" class="dialog-description">保留最近导入的 10 篇，超出后移除最早导入的一篇。仅保存在当前浏览器。载入范文会恢复这篇文章的练习进度，秒表重新计时。删除或自动清理范文会一并清除本浏览器中对应的学习对话。</p>
     <p id="historyEmpty" class="history-empty">还没有保存的范文。成功导入后，就可以在这里找到。</p>
     <ul id="historyList" class="history-list"></ul>
   </dialog>

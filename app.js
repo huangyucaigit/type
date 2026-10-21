@@ -126,6 +126,7 @@
       progressReady = true;
     }
     const hasDraft = full?.value || snapshot?.sentence?.groups?.some(group => group.draft || group.checked);
+    window.LearningAssistant?.configureArticle({ id: currentArticleId || (articleKind === "示例范文" ? "sample" : "temporary"), title: articleTitle, text: source });
     progressNotice(hasDraft ? "已恢复上次练习" : "");
     // Startup restores the reading position without opening a mobile keyboard.
     if (snapshot) restoreViewport();
@@ -185,6 +186,8 @@
     learnAction: $("selectionLearnAction"),
     learnButton: $("selectionLearnButton"),
     sentenceButton: $("selectionSentenceButton"),
+    assistantButton: $("selectionAssistantButton"),
+    onAddToAssistant: window.LearningAssistant ? selected => window.LearningAssistant.addSelection(selected) : null,
     getReferenceText: () => source,
     getAdditionalSources: () => activeMode === "sentence" ? sentencePractice?.getLearningSources() || [] : [],
     isPrimaryActive: () => activeMode === "realtime",
@@ -197,6 +200,7 @@
     isActive: () => activeMode === "realtime" && !dialog.open && !historyDialog.open && !window.ZijianAuth?.isDialogOpen(),
     onResumeInput: () => selectionTranslation?.prepareForInput(),
   });
+  window.LearningAssistantSelection = () => selectionTranslation?.getSelectionForAssistant?.();
 
   function words(text) {
     return text.trim() ? text.trim().split(/\s+/u).length : 0;
@@ -208,6 +212,7 @@
     $("articleTitle").textContent = articleTitle;
     $("articleTitle").title = articleTitle;
     sentencePractice?.setTitle?.(articleTitle);
+    window.LearningAssistant?.configureArticle({ id: currentArticleId || "sample", title: articleTitle, text: source });
   }
 
   function button(label, handler, className = "button button-secondary") {
@@ -289,6 +294,7 @@
       const rename = button("改名", () => { editingArticleId = article.id; editForm.hidden = false; titleInput.focus(); });
       rename.setAttribute("aria-label", `修改标题：${article.title}`);
       const remove = button("删除", () => {
+        if (window.LearningAssistant?.hasHistory(article.id) && !window.confirm("删除这篇范文时，会一并删除保存在此浏览器的学习对话。确定删除吗？")) return;
         try {
           history.remove(article.id);
           if (article.id === currentArticleId) { progressPersistable = false; progressDirty = false; progressNotice(); }

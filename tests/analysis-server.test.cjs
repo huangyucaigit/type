@@ -177,7 +177,7 @@ test('analysis accepts each supported selection type and trims textual fields', 
   }
 });
 
-test('malformed JSON and invalid analysis shapes are not cached and can be retried', async () => {
+test('malformed JSON and invalid analysis shapes automatically regenerate once', async () => {
   const { createAnalyzer } = await modulePromise;
   const invalid = [
     '', '```json\n{}\n```', '{broken', 'null', '[]', '"hello"',
@@ -196,8 +196,9 @@ test('malformed JSON and invalid analysis shapes are not cached and can be retri
   for (const content of invalid) {
     let calls = 0;
     const analyze = createAnalyzer({ config, fetchImpl: async () => ++calls === 1 ? response(content) : response() });
-    await rejectsWith(analyze('progress'), 502, /格式完整/);
     assert.equal((await analyze('progress')).cached, false);
+    assert.equal(calls, 2);
+    assert.equal((await analyze('progress')).cached, true);
     assert.equal(calls, 2);
   }
 });
@@ -206,8 +207,8 @@ test('truncated results never enter the analysis cache', async () => {
   const { createAnalyzer } = await modulePromise;
   let calls = 0;
   const analyze = createAnalyzer({ config, fetchImpl: async () => ++calls === 1 ? response(JSON.stringify(analysis()), 'length') : response() });
-  await rejectsWith(analyze('progress'), 502, /未完整/);
   assert.equal((await analyze('progress')).cached, false);
+  assert.equal(calls, 2);
 });
 
 test('missing analysis key makes zero provider requests', async () => {
@@ -229,14 +230,152 @@ test('provider errors return safe analysis diagnostics and release capacity for 
   }
 });
 
-test('analysis transport and provider envelope JSON failures do not expose raw errors', async () => {
+test('analysis transport failures do not expose raw errors or retry automatically', async () => {
   const { createAnalyzer } = await modulePromise;
-  for (const fail of [async () => { throw new Error(secret); }, async () => ({ ok: true, json: async () => { throw new Error(secret); } }), async () => ({ ok: true, json: async () => null })]) {
+  for (const fail of [async () => { throw new Error(secret); }]) {
     let calls = 0;
     const analyze = createAnalyzer({ config, fetchImpl: async () => ++calls === 1 ? fail() : response() });
     await rejectsWith(analyze('progress'), 502);
     assert.equal((await analyze('progress')).cached, false);
   }
+});
+
+test('malformed provider envelopes retry once without including diagnostics in the retry prompt', async () => {
+  const { createAnalyzer } = await modulePromise;
+  for (const fail of [async () => ({ ok: true, json: async () => { throw new Error(secret); } }), async () => ({ ok: true, json: async () => null })]) {
+    const calls = [];
+    const analyze = createAnalyzer({ config, fetchImpl: async (_url, options) => {
+      calls.push(options);
+      return calls.length === 1 ? fail() : response();
+    } });
+    assert.deepEqual((await analyze('progress')).analysis, analysis());
+    assert.equal(calls.length, 2);
+    assert.equal(calls[0].signal, calls[1].signal, 'one total deadline');
+    assert.match(JSON.parse(calls[1].body).messages[0].content, /上次输出未通过/);
+    assert.ok(!calls[1].body.includes(secret));
+  }
+});
+
+test('fenced and embedded JSON is recovered locally including escaped quotes and braces', async () => {
+  const { createAnalyzer } = await modulePromise;
+  const value = analysis({ translation: '引号 " 和括号 { } 以及反斜线 \\ 都是文本。' });
+  for (const content of ['```json\n' + JSON.stringify(value) + '\n```', '以下为分析：\n' + JSON.stringify(value) + '\n以上是结果。']) {
+    let calls = 0;
+    const analyze = createAnalyzer({ config, fetchImpl: async () => { calls++; return response(content); } });
+    assert.deepEqual((await analyze('progress')).analysis, value);
+    assert.equal(calls, 1);
+    assert.equal((await analyze('progress')).cached, true);
+  }
+});
+
+test('two complete prose answers degrade to text, share pending work and never enter the cache', async () => {
+  const { createAnalyzer } = await modulePromise;
+  let calls = 0;
+  const gate = deferred();
+  const analyze = createAnalyzer({ config, fetchImpl: async () => {
+    calls++; await gate.promise;
+    return response('progress 表示进步。\n常见搭配：make progress。');
+  } });
+  const first = analyze('progress');
+  const second = analyze('progress');
+  gate.resolve();
+  for (const result of await Promise.all([first, second])) {
+    assert.equal(result.analysis, undefined);
+    assert.equal(result.fallbackText, 'progress 表示进步。\n常见搭配：make progress。');
+    assert.equal(result.cached, false);
+  }
+  assert.equal(calls, 2);
+  await analyze('progress');
+  assert.equal(calls, 4);
+});
+
+test('invalid schema can degrade known readable fields without dumping unknown fields', async () => {
+  const { createAnalyzer } = await modulePromise;
+  const analyze = createAnalyzer({ config, fetchImpl: async () => response(JSON.stringify({
+    translation: '进步', brief: [], details: [{ label: '搭配', text: 'make progress' }], error: secret,
+  })) });
+  const result = await analyze('progress');
+  assert.equal(result.fallbackText, '进步\n\n搭配：make progress');
+  assert.ok(!JSON.stringify(result).includes(secret));
+});
+
+test('unusable, oversized, truncated and diagnostic-only content never becomes plain-text fallback', async () => {
+  const { createAnalyzer } = await modulePromise;
+  for (const reply of [response(''), response('{"translation":"unfinished'), response('[]'),
+    response('null'), response(JSON.stringify({ error: secret })), response('a'.repeat(60001)),
+    response('partial explanation', 'length')]) {
+    let calls = 0;
+    const analyze = createAnalyzer({ config, fetchImpl: async () => { calls++; return reply; } });
+    await rejectsWith(analyze('progress'), 502);
+    assert.equal(calls, 2);
+    await rejectsWith(analyze('progress'), 502);
+    assert.equal(calls, 4);
+  }
+});
+
+test('repair failure preserves only a complete earlier model answer and releases the limiter', async () => {
+  const { createAnalyzer, createRequestLimiter } = await modulePromise;
+  for (const failure of [async () => { throw new Error(secret); }, async () => ({ ok: false, status: 429, text: async () => secret })]) {
+    let calls = 0;
+    const analyze = createAnalyzer({ config, limiter: createRequestLimiter(1), fetchImpl: async () => {
+      calls++;
+      if (calls === 1) return response('进步。常用 make progress。');
+      if (calls === 2) return failure();
+      return response();
+    } });
+    assert.equal((await analyze('progress')).fallbackText, '进步。常用 make progress。');
+    assert.deepEqual((await analyze('progress')).analysis, analysis());
+    assert.equal(calls, 3);
+  }
+});
+
+test('format retry holds the concurrency slot until the entire operation ends', async () => {
+  const { createAnalyzer, createRequestLimiter } = await modulePromise;
+  const gate = deferred();
+  let calls = 0;
+  const analyze = createAnalyzer({ config, limiter: createRequestLimiter(1), fetchImpl: async () => {
+    if (++calls === 1) return response('{broken');
+    await gate.promise;
+    return response();
+  } });
+  const pending = analyze('progress');
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(calls, 2);
+  await rejectsWith(analyze('other'), 429);
+  gate.resolve();
+  await pending;
+});
+
+test('the repair attempt shares the total timeout and keeps a complete earlier fallback', async () => {
+  const { createAnalyzer } = await modulePromise;
+  for (const content of ['{broken', 'progress 表示进步。']) {
+    let calls = 0;
+    const keepAlive = setTimeout(() => {}, 1000);
+    const signals = [];
+    const analyze = createAnalyzer({ config, timeoutMs: 25, fetchImpl: async (_url, { signal }) => {
+      signals.push(signal);
+      if (++calls === 1) return response(content);
+      return new Promise((_resolve, reject) => signal.addEventListener('abort', () => reject(signal.reason), { once: true }));
+    } });
+    try {
+      if (content.startsWith('{')) await rejectsWith(analyze('progress'), 504);
+      else assert.equal((await analyze('progress')).fallbackText, content);
+      assert.equal(calls, 2);
+      assert.equal(signals[0], signals[1]);
+    } finally { clearTimeout(keepAlive); }
+  }
+});
+
+test('the protected analyze endpoint returns the text fallback contract without changing translation', async () => {
+  const { createAnalyzer } = await modulePromise;
+  const analyze = createAnalyzer({ config, fetchImpl: async () => response('progress 表示进步。') });
+  await withServer(async ({ request }) => {
+    const result = await request('/api/analyze', { body: JSON.stringify({ text: 'progress' }) });
+    assert.equal(result.status, 200);
+    assert.equal(result.headers['cache-control'], 'no-store');
+    assert.deepEqual(JSON.parse(result.body), { fallbackText: 'progress 表示进步。', model: config.model, cached: false });
+    assert.equal((await request('/api/translate', { body: JSON.stringify({ text: 'Original.' }) })).status, 200);
+  }, { analyze });
 });
 
 test('analysis timeout aborts the request and a subsequent attempt can succeed', async () => {

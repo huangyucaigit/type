@@ -10,8 +10,8 @@
 
   // Presentation only: clocks stay owned by their existing practice controllers.
   function createController({ storage, onChange } = {}) {
-    let collapsed = false, mode = 'realtime';
-    try { collapsed = storage?.getItem(STORAGE_KEY) === '1'; } catch { /* Keep working without storage. */ }
+    let collapsed = true, mode = 'realtime';
+    try { collapsed = storage?.getItem(STORAGE_KEY) !== '0'; } catch { /* Keep working without storage. */ }
     const readings = {
       realtime: { value: '00:00', running: false, started: false },
       sentence: { value: '00:00', running: false, started: false },
@@ -78,7 +78,7 @@
     window.addEventListener('storage', event => {
       if (event.key !== STORAGE_KEY && event.key !== null) return;
       const focusWithin = timer.contains?.(document.activeElement);
-      const state = controller.setCollapsed(event.newValue === '1', false);
+      const state = controller.setCollapsed(event.newValue !== '0', false);
       if (focusWithin) (state.collapsed ? expand : collapse).focus({ preventScroll: true });
     });
     window.ZijianTimer = Object.freeze({ update: controller.update, setMode: controller.setMode,

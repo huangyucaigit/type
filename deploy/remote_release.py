@@ -68,7 +68,7 @@ def managed_name(value):
         return value
     parts = value.split('/')
     if len(parts) == 2 and parts[0] == 'src' and re.fullmatch(r'[A-Za-z0-9._-]+', parts[1]):
-        if Path(parts[1]).suffix in ('.html', '.css', '.js', '.mjs') or parts[1] in ('robots.txt', 'sitemap.xml'):
+        if Path(parts[1]).suffix in ('.html', '.css', '.js', '.mjs') or parts[1] in ('robots.txt', 'sitemap.xml', 'learning-assistant.js.LEGAL.txt'):
             return value
     raise ReleaseError('Path is outside the managed type release files: ' + value)
 

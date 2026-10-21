@@ -15,11 +15,11 @@ function memoryStorage(initial = {}) {
   };
 }
 
-test('first visit and malformed preferences keep the stopwatch expanded', () => {
+test('first visit and malformed preferences keep the stopwatch collapsed', () => {
   for (const stored of [undefined, '', 'false', 'true', '2', '{broken']) {
     const storage = memoryStorage(stored === undefined ? {} : { [STORAGE_KEY]: stored });
     const controller = createController({ storage });
-    assert.equal(controller.snapshot().collapsed, false, `stored=${stored}`);
+    assert.equal(controller.snapshot().collapsed, true, `stored=${stored}`);
     assert.equal(controller.snapshot().mode, 'realtime');
     assert.equal(controller.snapshot().value, '00:00');
     assert.equal(controller.snapshot().running, false);
@@ -29,7 +29,7 @@ test('first visit and malformed preferences keep the stopwatch expanded', () => 
 });
 
 test('folding persists a shared browser preference and restores it without starting either clock', () => {
-  const storage = memoryStorage();
+  const storage = memoryStorage({ [STORAGE_KEY]: '0' });
   const first = createController({ storage });
   first.setCollapsed(true);
   assert.equal(first.snapshot().collapsed, true);
@@ -49,7 +49,8 @@ test('blocked browser storage does not prevent folding, expanding or receiving t
     setItem() { throw new Error('Quota denied'); },
   };
   const controller = createController({ storage });
-  assert.equal(controller.snapshot().collapsed, false);
+  assert.equal(controller.snapshot().collapsed, true);
+  assert.doesNotThrow(() => controller.setCollapsed(false));
   assert.doesNotThrow(() => controller.setCollapsed(true));
   controller.update({ mode: 'realtime', value: '00:08', running: true, started: true });
   assert.equal(controller.snapshot().collapsed, true);
@@ -84,7 +85,7 @@ test('folding and expanding preserve a running or paused reading including the f
     { value: '00:00', running: false, started: true },
     { value: '1:00:02', running: false, started: true },
   ]) {
-    const controller = createController({ storage: memoryStorage() });
+    const controller = createController({ storage: memoryStorage({ [STORAGE_KEY]: '0' }) });
     controller.update({ mode: 'realtime', ...reading });
     controller.setCollapsed(true);
     for (const [key, value] of Object.entries(reading)) assert.equal(controller.snapshot()[key], value);
@@ -94,7 +95,7 @@ test('folding and expanding preserve a running or paused reading including the f
 });
 
 test('clock refreshes never persist elapsed time or rewrite the folding preference', () => {
-  const storage = memoryStorage();
+  const storage = memoryStorage({ [STORAGE_KEY]: '0' });
   const updates = [];
   const controller = createController({ storage, onChange: state => updates.push(state) });
   controller.setCollapsed(true);

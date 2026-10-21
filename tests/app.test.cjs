@@ -22,7 +22,7 @@ function memoryStorage(initial = {}) {
 
 // Run the actual browser scripts against a small event/element harness. Layout,
 // native text selection and file pickers are verified separately in a browser.
-function createPage({ fetch, titleFetch, protocol = 'http:', storage = memoryStorage(), storageGetter, auth } = {}) {
+function createPage({ fetch, titleFetch, protocol = 'http:', storage = memoryStorage(), storageGetter, auth, assistant } = {}) {
   const elements = new Map();
   const intervals = [];
   const frames = new Map();
@@ -138,6 +138,7 @@ function createPage({ fetch, titleFetch, protocol = 'http:', storage = memorySto
   });
   context.window = context;
   if (auth) context.ZijianAuth = auth;
+  if (assistant) context.LearningAssistant = assistant;
   context.location = { protocol };
   Object.defineProperty(context, 'localStorage', { get: storageGetter || (() => storage) });
   context.innerHeight = 900;
@@ -234,7 +235,8 @@ function delayedFile(name) {
 
 test('the real app sends imported context only after the learning action and leaves the draft and stopwatch intact', async () => {
   const requests = [];
-  const page = createPage({ fetch: async (url, options) => {
+  const added = [];
+  const page = createPage({ assistant: { configureArticle() {}, addSelection: value => added.push(value) }, fetch: async (url, options) => {
     requests.push({ url, body: JSON.parse(options.body) });
     return { ok: true, json: async () => ({ analysis: {
       type: 'word', translation: '进步',
@@ -259,6 +261,7 @@ test('the real app sends imported context only after the learning action and lea
   await page.fire('selectionLearnButton', 'click');
   assert.equal(requests.length, 1);
   assert.equal(requests[0].url, '/api/analyze');
+  assert.equal(added.length, 0, 'independent learning must not add content to the assistant');
   assert.equal(requests[0].body.text, 'progress');
   assert.equal(requests[0].body.context.sentence, 'We make progress.');
   assert.equal(requests[0].body.context.paragraph, article);
@@ -479,9 +482,8 @@ test('one stopwatch button starts, pauses and continues while typing never chang
 test('folding the full stopwatch preserves the draft and running time while the edge label keeps updating', async () => {
   const storage = memoryStorage();
   const page = createPage({ storage });
-  assert.equal(page.$('floatingTimer').getAttribute('data-collapsed'), 'false');
-  assert.equal(page.$('timerExpand').hidden, true);
-  await page.fire('timerCollapse', 'click');
+  assert.equal(page.$('floatingTimer').getAttribute('data-collapsed'), 'true');
+  assert.equal(page.$('timerExpand').hidden, false);
   assert.equal(page.$('floatingTimer').getAttribute('data-collapsed'), 'true');
   assert.equal(page.$('timerExpanded').hidden, true);
   assert.equal(page.$('timerExpand').hidden, false);

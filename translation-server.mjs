@@ -5,6 +5,7 @@ import path from 'node:path';
 import { execFile } from 'node:child_process';
 import { isIP } from 'node:net';
 import { ANALYSIS_SYSTEM_PROMPT, analysisUserPrompt } from './analysis-prompts.mjs';
+import { recoverAnalysis } from './analysis-recovery.mjs';
 import { createFeedbackStore, FeedbackError } from './feedback-store.mjs';
 import { createSentenceReviewer, validateSentenceReviewInput, SentenceReviewError } from './sentence-review.mjs';
 import { createArticleTitler, validateTitleInput, ArticleTitleError } from './article-title.mjs';
@@ -12,6 +13,8 @@ import { createAuthService, AuthError } from './auth-service.mjs';
 import { createAuthProviders } from './auth-providers.mjs';
 import { PaymentError } from './payment-client.mjs';
 import { readPaymentOptions } from './payment-config.mjs';
+import { createAssistant, validateAssistantInput, AssistantError } from './assistant-service.mjs';
+import { once } from 'node:events';
 
 const ROOT = path.dirname(fileURLToPath(import.meta.url));
 export const PORT = 4173;
@@ -27,6 +30,9 @@ const ASSETS = new Map([
   ...['styles.css', 'sentence-mode.css', 'about.css', 'feedback.css', 'auth.css', 'starter-wheel.css', 'share-card.css', 'billing.css'].map(name => [`/${name}`, [name, 'text/css; charset=utf-8']]),
   ...['app.js', 'article-history.js', 'typing-core.js', 'sentence-core.js', 'sentence-mode.js', 'floating-timer.js', 'reference-selection.js', 'selection-translation.js', 'feedback.js', 'auth.js', 'starter-wheel.js', 'qr-code.js', 'share-card.js', 'billing.js'].map(name => [`/${name}`, [name, 'text/javascript; charset=utf-8']]),
 ]);
+for (const name of ['assistant-bridge.js', 'assistant-history.js', 'learning-assistant.js']) ASSETS.set(`/${name}`, [name, 'text/javascript; charset=utf-8']);
+ASSETS.set('/learning-assistant.css', ['learning-assistant.css', 'text/css; charset=utf-8']);
+ASSETS.set('/learning-assistant.js.LEGAL.txt', ['learning-assistant.js.LEGAL.txt', 'text/plain; charset=utf-8']);
 
 export class TranslationError extends Error {
   constructor(status, message) { super(message); this.status = status; }
@@ -205,6 +211,7 @@ function validateAnalysisResult(content) {
 }
 
 function cloneAnalysisResult(result, cached) {
+  if (result.fallbackText) return { fallbackText: result.fallbackText, model: result.model, cached: false };
   return {
     analysis: {
       ...result.analysis,
@@ -223,42 +230,59 @@ export function createAnalyzer({ config = readConfig(), fetchImpl = fetch, timeo
   async function request(input) {
     if (!config.key) throw new TranslationError(503, '未配置 DeepSeek 密钥，请检查 .env 后重启。');
     limiter.acquire('正在处理其他翻译或分析，请稍后重试。');
+    let fallbackText = '';
     try {
-      const response = await fetchImpl(config.endpoint, {
-        method: 'POST',
-        headers: { Authorization: `Bearer ${config.key}`, 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          model: config.model,
-          thinking: { type: 'disabled' },
-          response_format: { type: 'json_object' },
-          messages: [
-            { role: 'system', content: ANALYSIS_SYSTEM_PROMPT },
-            { role: 'user', content: analysisUserPrompt(input) },
-          ],
-          max_tokens: 8192,
-          temperature: 0.2,
-        }),
-        signal: AbortSignal.timeout(timeoutMs),
-      });
-      if (!response.ok) {
-        const errors = {
-          400: [502, '分析请求未被接受，请稍后重试。'],
-          401: [503, 'DeepSeek 密钥无效，请检查 .env 后重启。'],
-          402: [503, 'DeepSeek 余额不足，请充值后重试。'],
-          403: [503, 'DeepSeek 账户暂时无法使用，请检查账户状态。'],
-          429: [429, 'DeepSeek 请求繁忙，请稍后重试。'],
-        };
-        const [status, message] = errors[response.status] || [502, 'DeepSeek 服务暂时不可用，请稍后重试。'];
-        throw new TranslationError(status, message);
+      // Both attempts share one deadline and one concurrency slot.
+      const signal = AbortSignal.timeout(timeoutMs);
+      let lastError;
+      for (let attempt = 0; attempt < 2; attempt++) {
+        signal.throwIfAborted();
+        const response = await fetchImpl(config.endpoint, {
+          method: 'POST',
+          headers: { Authorization: `Bearer ${config.key}`, 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            model: config.model,
+            thinking: { type: 'disabled' },
+            response_format: { type: 'json_object' },
+            messages: [
+              { role: 'system', content: ANALYSIS_SYSTEM_PROMPT + (attempt ? '\n上次输出未通过结构校验。请重新生成完整结果，只返回规定的 JSON 对象，不要代码块或额外字段。brief 和 details 必须是非空的 label/text 对象数组。控制篇幅，确保完整结束。' : '') },
+              { role: 'user', content: analysisUserPrompt(input) },
+            ],
+            max_tokens: 8192,
+            temperature: 0.2,
+          }),
+          signal,
+        });
+        if (!response.ok) {
+          const errors = {
+            400: [502, '分析请求未被接受，请稍后重试。'],
+            401: [503, 'DeepSeek 密钥无效，请检查 .env 后重启。'],
+            402: [503, 'DeepSeek 余额不足，请充值后重试。'],
+            403: [503, 'DeepSeek 账户暂时无法使用，请检查账户状态。'],
+            429: [429, 'DeepSeek 请求繁忙，请稍后重试。'],
+          };
+          const [status, message] = errors[response.status] || [502, 'DeepSeek 服务暂时不可用，请稍后重试。'];
+          throw new TranslationError(status, message);
+        }
+        let data;
+        try { data = await response.json(); }
+        catch { lastError = new TranslationError(502, '未收到格式完整的学习分析，请重试。'); continue; }
+        const choice = data?.choices?.[0];
+        if (choice?.finish_reason !== 'stop') {
+          lastError = new TranslationError(502, '学习分析未完整返回，请缩小选区后重试。');
+          if (choice?.finish_reason === 'content_filter') throw lastError;
+          continue;
+        }
+        const recovered = recoverAnalysis(choice?.message?.content, validateAnalysisResult);
+        if (recovered.analysis) return { analysis: recovered.analysis, model: config.model };
+        fallbackText = recovered.fallbackText || fallbackText;
+        lastError = new TranslationError(502, '未收到格式完整的学习分析，请重试。');
       }
-      let data;
-      try { data = await response.json(); }
-      catch { throw new TranslationError(502, '未收到格式完整的学习分析，请重试。'); }
-      const choice = data?.choices?.[0];
-      if (choice?.finish_reason !== 'stop') throw new TranslationError(502, '学习分析未完整返回，请缩小选区后重试。');
-      const analysis = validateAnalysisResult(choice?.message?.content);
-      return { analysis, model: config.model };
+      if (fallbackText) return { fallbackText, model: config.model };
+      throw lastError;
     } catch (error) {
+      // A complete first answer can still be read if the repair request fails.
+      if (fallbackText) return { fallbackText, model: config.model };
       if (error instanceof TranslationError) throw error;
       if (error?.name === 'TimeoutError' || error?.name === 'AbortError') throw new TranslationError(504, '学习分析超过 30 秒，请稍后重试。');
       throw new TranslationError(502, '暂时无法连接 DeepSeek，请检查网络后重试。');
@@ -277,8 +301,10 @@ export function createAnalyzer({ config = readConfig(), fetchImpl = fetch, timeo
     pending.set(key, task);
     try {
       const result = await task;
-      cache.set(key, result);
-      if (cache.size > maxCache) cache.delete(cache.keys().next().value);
+      if (result.analysis) {
+        cache.set(key, result);
+        if (cache.size > maxCache) cache.delete(cache.keys().next().value);
+      }
       return cloneAnalysisResult(result, false);
     } finally { pending.delete(key); }
   };
@@ -330,7 +356,7 @@ function feedbackCookie(request) {
   return value ? value.trim().slice('mars_feedback='.length) : '';
 }
 
-export function createServer({ translate, analyze, review, titleArticle, config, configured = true, publicOrigins = [], feedbackStore, trustProxy = false, feedbackRateLimiter, aiRateLimiter, authService, authProviders, authFilename, paymentOptions, paymentNotificationLogger = entry => console.info(JSON.stringify(entry)) } = {}) {
+export function createServer({ translate, analyze, review, titleArticle, assistant, config, configured = true, publicOrigins = [], feedbackStore, trustProxy = false, feedbackRateLimiter, aiRateLimiter, authService, authProviders, authFilename, paymentOptions, paymentNotificationLogger = entry => console.info(JSON.stringify(entry)) } = {}) {
   publicOrigins = publicOrigins.map(normalizePublicOrigin);
   feedbackStore ||= createFeedbackStore({ filePath: path.join(process.env.ZIJIAN_FEEDBACK_DATA_DIR || path.join(ROOT, '.data'), 'feedback.json') });
   feedbackRateLimiter ||= createFeedbackRateLimiter();
@@ -341,6 +367,7 @@ export function createServer({ translate, analyze, review, titleArticle, config,
   analyze ||= createAnalyzer({ ...(config ? { config } : {}), limiter });
   review ||= createSentenceReviewer({ config: config || readConfig(), limiter });
   titleArticle ||= createArticleTitler({ config: config || readConfig(), limiter });
+  assistant ||= createAssistant({ config: config || readConfig(), limiter });
   const ownsAuthService = !authService;
   const getAuthService = () => authService ||= createAuthService({
     filename: authFilename || path.join(process.env.ZIJIAN_AUTH_DATA_DIR || path.join(ROOT, '.data'), 'auth.sqlite'),
@@ -371,14 +398,14 @@ export function createServer({ translate, analyze, review, titleArticle, config,
       const secure = Boolean(request.socket.encrypted) || (trustProxy && request.headers['x-forwarded-proto'] === 'https');
       const forwardedIp = request.headers['x-real-ip'];
       const remoteIp = trustProxy && typeof forwardedIp === 'string' && isIP(forwardedIp) ? forwardedIp : request.socket.remoteAddress;
-      if (['/api/translate', '/api/analyze', '/api/review', '/api/article-title'].includes(pathname) && request.method === 'POST') aiRateLimiter.check(remoteIp);
+      if (['/api/translate', '/api/analyze', '/api/review', '/api/article-title', '/api/assistant'].includes(pathname) && request.method === 'POST') aiRateLimiter.check(remoteIp);
       const hostname = new URL(`http://${host}`).hostname;
       const billingRoute = pathname.startsWith('/api/billing/');
       const paymentNotification = pathname === '/payments/notify';
       const allowMock = !trustProxy && ['127.0.0.1', 'localhost', '[::1]'].includes(hostname)
         && ['127.0.0.1', '::1', '::ffff:127.0.0.1'].includes(request.socket.remoteAddress);
       const accessRoute = pathname.startsWith('/api/auth/') || pathname === '/api/guest/start' || pathname.startsWith('/api/coupons/') || pathname.startsWith('/api/referrals/') || billingRoute;
-      const protectedRoute = accessRoute || paymentNotification || ['/api/translate', '/api/analyze', '/api/review', '/api/article-title'].includes(pathname);
+      const protectedRoute = accessRoute || paymentNotification || ['/api/translate', '/api/analyze', '/api/review', '/api/article-title', '/api/assistant'].includes(pathname);
       if (protectedRoute && !secure && !['127.0.0.1', 'localhost', '[::1]'].includes(hostname)) {
         return json(response, 426, { error: '请通过网站的 HTTPS 加密地址登录和练习。', code: 'HTTPS_REQUIRED' });
       }
@@ -440,6 +467,39 @@ export function createServer({ translate, analyze, review, titleArticle, config,
         const result = await feedbackStore.submit({ cookie: feedbackCookie(request), csrfToken: body.csrfToken, fingerprint: body.fingerprint, nickname: body.nickname, message: body.message, website: body.website });
         return json(response, 201, result);
       }
+      if (pathname === '/api/assistant') {
+        if (request.method !== 'POST') return json(response, 405, { error: '请通过学习助手提问。' });
+        if (typeof origin !== 'string') return json(response, 403, { error: '请从本站学习助手发起请求。' });
+        if (!/^application\/json(?:\s*;|$)/i.test(request.headers['content-type'] || '')) return json(response, 415, { error: '助手请求格式不受支持。' });
+        const body = await readJson(request, { maxBytes: 240000, invalidMessage: '助手请求格式无效。', largeMessage: '对话过长，请缩小内容后重试。' });
+        const input = validateAssistantInput(body);
+        const access = await getAuthService().requireAccess(request);
+        const owner = access.user ? `account:${access.user.id}` : 'guest';
+        if (body.owner !== owner) return json(response, 409, { error: '登录身份已变化，请重新打开助手后发送。', code: 'ASSISTANT_OWNER_CHANGED' });
+        const controller = new AbortController();
+        const cancel = () => { if (!response.writableFinished) controller.abort(); };
+        response.on('close', cancel);
+        request.on('aborted', cancel);
+        try {
+          for await (const part of assistant(input, { signal: controller.signal })) {
+            if (controller.signal.aborted || response.destroyed) break;
+            if (!response.headersSent) response.writeHead(200, { 'Content-Type': 'text/event-stream; charset=utf-8',
+              'Cache-Control': 'no-store', 'X-Accel-Buffering': 'no', 'x-vercel-ai-ui-message-stream': 'v1' });
+            if (!response.write(`data: ${JSON.stringify(part)}\n\n`)) await once(response, 'drain', { signal: controller.signal });
+          }
+          if (!response.destroyed && !controller.signal.aborted) response.end('data: [DONE]\n\n');
+        } catch (error) {
+          if (controller.signal.aborted || response.destroyed) return;
+          if (!response.headersSent) throw error;
+          const message = error instanceof AssistantError ? error.message : '回答中断，已保留你的问题，请重试。';
+          response.end(`data: ${JSON.stringify({ type: 'error', errorText: message })}\n\ndata: [DONE]\n\n`);
+        } finally {
+          controller.abort();
+          response.off('close', cancel);
+          request.off('aborted', cancel);
+        }
+        return;
+      }
       if (pathname === '/api/translate') {
         if (request.method !== 'POST') return json(response, 405, { error: '请通过网页发起翻译。' });
         if (!/^application\/json(?:\s*;|$)/i.test(request.headers['content-type'] || '')) return json(response, 415, { error: '翻译请求格式不受支持。' });
@@ -482,7 +542,7 @@ export function createServer({ translate, analyze, review, titleArticle, config,
       response.end(request.method === 'HEAD' ? undefined : content);
     } catch (error) {
       if (response.destroyed) return;
-      const safeError = error instanceof TranslationError || error instanceof FeedbackError || error instanceof SentenceReviewError || error instanceof ArticleTitleError || error instanceof AuthError || error instanceof PaymentError ? error : new TranslationError(500, '本机服务暂时出错，请稍后重试。');
+      const safeError = error instanceof AssistantError || error instanceof TranslationError || error instanceof FeedbackError || error instanceof SentenceReviewError || error instanceof ArticleTitleError || error instanceof AuthError || error instanceof PaymentError ? error : new TranslationError(500, '本机服务暂时出错，请稍后重试。');
       const details = { error: safeError.message };
       if (safeError instanceof AuthError || safeError instanceof PaymentError) {
         details.code = safeError.code;

@@ -7,6 +7,7 @@
 
   function create({ input, display, area, popup, sourceLabel, translationLabel, statusLabel,
     retryButton, closeButton, typeLabel, briefContainer, detailsContainer, expandButton, learnAction, learnButton, sentenceButton,
+    assistantButton, onAddToAssistant = null,
     getReferenceText = () => "", isActive = () => true,
     isPrimaryActive = () => true, getAdditionalSources = () => [] }) {
     const cache = new Map();
@@ -571,6 +572,7 @@
     function validateAnalysis(data) {
       const analysis = data?.analysis;
       const validText = (value, limit) => typeof value === "string" && Boolean(value.trim()) && value.length <= limit;
+      if (!analysis && validText(data?.fallbackText, 16000)) return { fallbackText: data.fallbackText.trim() };
       const validRows = rows => Array.isArray(rows) && rows.length > 0 && rows.length <= 20
         && rows.every(row => row && validText(row.label, 100) && validText(row.text, 16000));
       if (!analysis || !Object.prototype.hasOwnProperty.call(TYPE_LABELS, analysis.type)
@@ -614,7 +616,8 @@
       })();
       cache.set(key, promise);
       while (cache.size > MAX_CACHE_SIZE) cache.delete(cache.keys().next().value);
-      promise.catch(() => { if (cache.get(key) === promise) cache.delete(key); });
+      const evict = () => { if (cache.get(key) === promise) cache.delete(key); };
+      promise.then(result => { if (result.fallbackText) evict(); }, evict);
       return promise;
     }
 
@@ -652,8 +655,14 @@
       try {
         const analysis = await request(selected);
         if (!stillCurrent()) return;
-        renderAnalysis(analysis);
-        statusLabel.textContent = "";
+        if (analysis.fallbackText) {
+          translationLabel.textContent = analysis.fallbackText;
+          statusLabel.textContent = "当前以简洁文本展示，可重试获取完整学习卡片。";
+          retryButton.hidden = false;
+        } else {
+          renderAnalysis(analysis);
+          statusLabel.textContent = "";
+        }
       } catch (error) {
         if (!stillCurrent()) return;
         statusLabel.textContent = error.message;
@@ -792,6 +801,7 @@
     };
     listen(learnButton, "pointerdown", pressAction(learnButton));
     listen(sentenceButton, "pointerdown", pressAction(sentenceButton));
+    listen(assistantButton, "pointerdown", pressAction(assistantButton));
     function actionSnapshot(button) {
       const selected = pressedSelection || actionSelection;
       const live = selection();
@@ -809,6 +819,13 @@
       dismissedKey = null;
       popupEngaged = true;
       return translate(selected);
+    });
+    listen(assistantButton, "click", () => {
+      const selected = actionSnapshot(assistantButton);
+      if (!selected || typeof onAddToAssistant !== "function") return;
+      close(false);
+      dismissedKey = selected.key;
+      return onAddToAssistant(selected);
     });
     listen(sentenceButton, "click", () => {
       const selected = actionSnapshot(sentenceButton);
@@ -838,7 +855,8 @@
     popup.hidden = true;
     hideAction();
     clearAnalysis();
-    return { close, reset, prepareForInput: () => close(), translateSelection };
+    return { close, reset, prepareForInput: () => close(), translateSelection,
+      getSelectionForAssistant: () => { const selected = selection() || actionSelection; return sourceAvailable(selected) && /[A-Za-z]/.test(selected.text) ? selected : null; } };
   }
 
   window.SelectionTranslation = { create };

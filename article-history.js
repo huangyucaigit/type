@@ -116,6 +116,9 @@
         articles: state.articles, currentId: state.currentId,
         ...(state.sampleProgress ? { sampleProgress: state.sampleProgress } : {}) }));
       memory = copy(state);
+      if (typeof window !== "undefined" && typeof window.dispatchEvent === "function" && typeof CustomEvent === "function") {
+        window.dispatchEvent(new CustomEvent("articlehistorychange"));
+      }
       return copy(state);
     }
 

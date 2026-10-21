@@ -35,6 +35,8 @@ Nginx 是多个域名共用的网站入口。`pay.where.work` 的支付服务在
 
 ## 发布前准备
 
+学习助手源文件位于 `assistant/`，修改后先在该目录执行 `npm ci`、`npm run build`、`npm test`。根目录的 `learning-assistant.js`、`learning-assistant.css`、`learning-assistant.js.LEGAL.txt` 是同源发布产物；主站运行时无需安装前端依赖。服务端 `assistant-service.mjs` 同样随根目录程序文件发布。首次发布助手流式接口时还需同步仓库内 Nginx 助手专用路由配置；代理配置仍遵循原有显式参数与检查流程。
+
 本机需要 PowerShell、Node.js 22.22 或更新版本（生产镜像使用 Node.js 24），以及 `ssh`、`scp`、`tar`；远端需要 Python 3.6 或更新版本、Docker Compose 和 `curl`。本地部署测试需要 Python 3.6 或更新版本。默认通过 SSH（加密远程连接）使用 `$env:USERPROFILE\.ssh\codex_linux` 登录服务器，保留已校验的主机记录。
 
 1. 确认本次代码范围及 Git 提交，检查用户功能说明是否仍与实现一致。部署脚本发布工作区文件，不能只凭提交号判断工作区内容。

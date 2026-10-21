@@ -19,7 +19,7 @@ function Invoke-ReleaseTool([string]$Arguments) {
 }
 $items = @()
 foreach ($file in Get-ChildItem -LiteralPath $projectRoot -File) {
-    if ($file.Extension -notin @('.html', '.css', '.js', '.mjs') -and $file.Name -notin @('robots.txt', 'sitemap.xml')) { continue }
+    if ($file.Extension -notin @('.html', '.css', '.js', '.mjs') -and $file.Name -notin @('robots.txt', 'sitemap.xml', 'learning-assistant.js.LEGAL.txt')) { continue }
     if ($file.Name -notmatch '^[a-zA-Z0-9._-]+$') { throw 'Unsupported source filename.' }
     $items += [pscustomobject]@{ Source = $file.FullName; Target = "src/$($file.Name)"; Hash = (Get-FileHash -LiteralPath $file.FullName -Algorithm SHA256).Hash.ToLowerInvariant() }
 }

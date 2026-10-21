@@ -12,7 +12,7 @@ function analysisResponse(translation, type = 'phrase', extras = {}) {
 }
 
 function createPage({ protocol = 'http:', fetcher, source = '', optionalUI = true,
-  touchPoints = 0, coarsePointer = false, touchUI = true, viewport } = {}) {
+  touchPoints = 0, coarsePointer = false, touchUI = true, viewport, assistantUI = false, onAddToAssistant } = {}) {
   class Target {
     constructor() { this.listeners = new Map(); }
     addEventListener(name, callback) {
@@ -115,7 +115,7 @@ function createPage({ protocol = 'http:', fetcher, source = '', optionalUI = tru
   };
   const names = ['input', 'display', 'area', 'popup', 'sourceLabel', 'translationLabel', 'statusLabel', 'retryButton', 'closeButton',
     ...(optionalUI ? ['typeLabel', 'briefContainer', 'detailsContainer', 'expandButton'] : []),
-    ...(touchUI ? ['learnAction', 'learnButton', 'sentenceButton'] : [])];
+    ...(touchUI ? ['learnAction', 'learnButton', 'sentenceButton'] : []), ...(assistantUI ? ['assistantButton'] : [])];
   const elements = Object.fromEntries(names.map(name => [name, new Element()]));
   elements.input.parentElement = elements.area;
   elements.display.parentElement = elements.area;
@@ -132,6 +132,7 @@ function createPage({ protocol = 'http:', fetcher, source = '', optionalUI = tru
   if (elements.learnAction) {
     elements.learnAction.hidden = true;
     elements.learnAction.append(elements.learnButton, elements.sentenceButton);
+    if (elements.assistantButton) elements.learnAction.append(elements.assistantButton);
     elements.sentenceButton.textContent = '整句';
     elements.sentenceButton.hidden = true;
   }
@@ -142,7 +143,7 @@ function createPage({ protocol = 'http:', fetcher, source = '', optionalUI = tru
   vm.runInContext(fs.readFileSync(path.join(__dirname, '..', 'sentence-core.js'), 'utf8'), context);
   vm.runInContext(fs.readFileSync(path.join(__dirname, '..', 'selection-translation.js'), 'utf8'), context);
   const controller = window.SelectionTranslation.create({ ...elements, isActive: () => active, getReferenceText: () => source,
-    isPrimaryActive: () => primaryActive, getAdditionalSources: () => additionalSources });
+    isPrimaryActive: () => primaryActive, getAdditionalSources: () => additionalSources, onAddToAssistant });
   return {
     ...elements, document, window, controller, requests,
     active(value) { active = value; },
@@ -697,6 +698,43 @@ test('returned markup is assigned as plain text and malformed responses remain r
   await invalid.learnSelection();
   assert.equal(invalid.retryButton.hidden, false);
   assert.match(invalid.statusLabel.textContent, /有效学习分析/);
+});
+
+test('plain-text fallback stays in the independent panel, is safe, and manual retry bypasses cache', async () => {
+  let calls = 0;
+  let assistantCalls = 0;
+  const prose = '进步。\n<img src=x onerror=alert(1)>\n常用 make progress。';
+  const page = createPage({ assistantUI: true, onAddToAssistant: () => { assistantCalls++; },
+    fetcher: () => ({ ok: true, json: async () => ++calls === 1
+      ? { fallbackText: prose } : analysisResponse('恢复为学习卡片。') }) });
+  await page.selectDisplay('progress');
+  await page.learnSelection();
+  assert.equal(page.translationLabel.textContent, prose);
+  assert.equal(page.translationLabel.childNodes.length, 0);
+  assert.equal(page.popup.hidden, false);
+  assert.equal(page.expandButton.hidden, true);
+  assert.equal(page.retryButton.hidden, false);
+  assert.match(page.statusLabel.textContent, /简洁文本/);
+  assert.equal(page.briefContainer.textContent, '');
+  assert.equal(page.detailsContainer.textContent, '');
+  await page.retryButton.emit('click');
+  assert.equal(calls, 2);
+  assert.equal(page.translationLabel.textContent, '恢复为学习卡片。');
+  assert.equal(page.statusLabel.textContent, '');
+  assert.equal(page.retryButton.hidden, true);
+  assert.equal(page.expandButton.hidden, false);
+  assert.equal(assistantCalls, 0);
+  assert.ok(page.requests.every(request => request.url === '/api/analyze'));
+});
+
+test('invalid fallback payloads remain errors instead of rendering arbitrary response bodies', async () => {
+  for (const fallbackText of ['', '   ', 42, {}, 'a'.repeat(16001)]) {
+    const page = createPage({ fetcher: () => ({ ok: true, json: async () => ({ fallbackText }) }) });
+    await page.selectDisplay('progress');
+    await page.learnSelection();
+    assert.equal(page.translationLabel.textContent, '');
+    assert.equal(page.retryButton.hidden, false);
+  }
 });
 
 test('desktop popover fits the viewport and repositions on resize and nested scrolling', async () => {
@@ -1746,4 +1784,37 @@ test('releasing on the other split action or outside the pressed sentence button
     assert.equal(page.requests.length, 0, target);
     assert.equal(page.popup.hidden, true);
   }
+});
+
+test('touch Add to assistant retains native selected text and sentence after the tap collapses the range without requesting AI', async () => {
+  const selected = [];
+  const article = 'Practice brings progress. Technology accelerates progress in medicine.';
+  const page = createPage({ source: article, touchPoints: 5, assistantUI: true, onAddToAssistant: value => selected.push(value) });
+  const start = article.lastIndexOf('progress');
+  await page.selectRange(start, start + 8);
+  assert.equal(page.requests.length, 0);
+  await page.assistantButton.emit('pointerdown', { pointerType: 'touch', button: 0 });
+  await page.document.emit('pointerdown', { target: page.assistantButton, pointerType: 'touch', button: 0 });
+  page.window.getSelection().removeAllRanges();
+  await page.document.emit('selectionchange');
+  await page.assistantButton.emit('click');
+  assert.equal(selected.length, 1);
+  assert.equal(selected[0].text, 'progress');
+  assert.equal(selected[0].context.sentence, 'Technology accelerates progress in medicine.');
+  assert.equal(page.requests.length, 0); assert.equal(page.popup.hidden, true);
+});
+
+test('word and whole-sentence learning keep the original popup and analyze requests when the assistant entry is present', async () => {
+  const added = [];
+  const source = 'Regular practice improves confidence.';
+  for (const action of ['learnButton', 'sentenceButton']) {
+    const page = createPage({ source, assistantUI: true, onAddToAssistant: value => added.push(value) });
+    await page.selectRange(0, 7);
+    await page[action].emit('click');
+    assert.equal(page.requests.length, 1);
+    assert.equal(page.requests[0].text, action === 'learnButton' ? 'Regular' : source);
+    assert.equal(page.popup.hidden, false);
+    assert.equal(page.translationLabel.textContent, `中文：${action === 'learnButton' ? 'Regular' : source}`);
+  }
+  assert.equal(added.length, 0);
 });
