@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="description" content="一个可复用的图文展示模板。替换标题、正文、图片和链接即可使用。">
+  <title>你的图文标题 · 图文展示模板</title>
+  <style>
+    *{box-sizing:border-box}body{margin:0;background:#f7f5ef;color:#26392f;font:16px/1.9 "Microsoft YaHei",system-ui,sans-serif}main{max-width:980px;margin:48px auto;padding:0 24px}.note{display:grid;grid-template-columns:1fr 1fr;gap:36px;padding:28px;background:#fffef9;border:1px solid #dce2d8;border-radius:12px}.placeholder{aspect-ratio:3/4;display:grid;place-items:center;background:#edf0e7;border:1px dashed #93a58e;color:#657369;text-align:center;padding:24px}h1{font-size:30px;line-height:1.55;margin:10px 0 24px}.category{color:#285d44;font-size:13px}.body{white-space:pre-wrap}.link{display:inline-block;background:#285d44;color:white;text-decoration:none;padding:9px 20px;border-radius:6px;margin-top:20px}a:focus-visible{outline:3px solid #be7b25;outline-offset:4px}footer{color:#657369;font-size:12px;margin-top:24px}@media(max-width:650px){main{margin:20px auto;padding:0 16px}.note{grid-template-columns:1fr;padding:20px;gap:20px}h1{font-size:25px}}
+  </style>
+</head>
+<body>
+  <main>
+    <article class="note">
+      <!-- 将下方占位区域替换为 <img src="你的图片.jpg" alt="说明图片内容">。 -->
+      <div class="placeholder">替换成你的图片<br>建议使用竖版图片</div>
+      <div>
+        <p class="category">你的栏目名称</p>
+        <h1>一句话讲清这篇图文的主题</h1>
+        <div class="body">从一个具体问题开始。
+
+写下你的做法、实际发现，以及对读者有用的一点经验。
+
+用几句自然的话就好。</div>
+        <a class="link" href="https://type.where.work/">看看雅思作文练习工具</a>
+      </div>
+    </article>
+    <footer>图文展示模板 · 可自行替换图片、文字和链接。模板代码采用 MIT 许可证，详见同目录 LICENSE。</footer>
+  </main>
+</body>
+</html>

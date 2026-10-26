@@ -1,0 +1,130 @@
+{
+  "version": 1,
+  "files": [
+    {
+      "path": ".gitattributes",
+      "sha256": "705fd4d6451a31d36b3df7de96f83f30ac976c9b4a6d1e51671d8e2f33e2d0da",
+      "bytes": 8
+    },
+    {
+      "path": ".gitignore",
+      "sha256": "fe4518c42c711301507f47e492a0c58efac173ee38948c301a41c814cbd7aba1",
+      "bytes": 46
+    },
+    {
+      "path": ".nojekyll",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    {
+      "path": "AGENTS.md",
+      "sha256": "1b1f857db135fec671de3cb82d79246d4653bf7b94c7a1f30c927b782c146e87",
+      "bytes": 591
+    },
+    {
+      "path": "README.md",
+      "sha256": "64061adc7256e86cbd9473e5b986a0307141dc5391f3d3a1c0f32adbc52f548c",
+      "bytes": 2249
+    },
+    {
+      "path": "assets/gallery.js",
+      "sha256": "0f527658bd6626929cb1dea9a0df68b8e1e6fc164828db6735f9be541663694e",
+      "bytes": 577
+    },
+    {
+      "path": "assets/images/hide-and-recall/01.png",
+      "sha256": "6f6d87d229acb52ed348e5c77ed9cb5317dff8541f7bc338918fe7234f4ae0be",
+      "bytes": 1544408
+    },
+    {
+      "path": "assets/images/hide-and-recall/02.png",
+      "sha256": "37cedb0c5f4ef623ab27747990f50548283a9d2d15850f4d87779cffe5659ffe",
+      "bytes": 1534221
+    },
+    {
+      "path": "assets/images/hide-and-recall/03.png",
+      "sha256": "2318c2fa0b9d5e05f85053f3795686493cb54d8d0ede8a0c2a2f991d9d95f979",
+      "bytes": 1572590
+    },
+    {
+      "path": "assets/images/highlight-expressions/01.png",
+      "sha256": "ed779080ae8b0d39f980e5080696e51719d8a3156dad780d442dc7fffba40b8b",
+      "bytes": 1313001
+    },
+    {
+      "path": "assets/images/highlight-expressions/02.png",
+      "sha256": "5c7cacf1b85dd5433b7accbebd2ee418686cff8e947add7b11940b078c271f74",
+      "bytes": 1375151
+    },
+    {
+      "path": "assets/images/why-i-built-it/01.png",
+      "sha256": "3c20225da5b59d6b33cc14769e8749ec122085a63c66f7479cce0f479e693b09",
+      "bytes": 1851245
+    },
+    {
+      "path": "assets/images/why-i-built-it/02.jpg",
+      "sha256": "fbc3ef86605685070d722d7d907ce11d848cba1fa2fac585e3f81e02fe1ae9ec",
+      "bytes": 96156
+    },
+    {
+      "path": "assets/images/why-i-built-it/03.png",
+      "sha256": "063df9a560490bf59566fbbbeb79556933c1656f33f62c66b3a1ef2558127a10",
+      "bytes": 299586
+    },
+    {
+      "path": "assets/images/why-i-built-it/04.png",
+      "sha256": "180baa605848907abdb1fbdd9e4bb22dbd9dc540b56d838ec2c6293066294b5b",
+      "bytes": 190462
+    },
+    {
+      "path": "assets/images/why-i-built-it/05.png",
+      "sha256": "e0c5565272a13a95aebe4b8e38b33d737f1b3f55f2e824372af9040f4b8b27f7",
+      "bytes": 264597
+    },
+    {
+      "path": "assets/showcase.css",
+      "sha256": "3b1cd3d1da35e0a34dcc57c00900bc02ce56315e1e04713651539907c7031d62",
+      "bytes": 4642
+    },
+    {
+      "path": "index.html",
+      "sha256": "3fed4424a77b622fd93af194aea6376d860f60bde23dac89ed8fcc8fb7fcd88a",
+      "bytes": 3744
+    },
+    {
+      "path": "notes/hide-and-recall.html",
+      "sha256": "f3155980ad5df4ac7511678c2b29161c87cc91523cdf856847561d0e01768ccd",
+      "bytes": 3961
+    },
+    {
+      "path": "notes/highlight-expressions.html",
+      "sha256": "db21ab220619b0da4f3c4652174815f0e5036d09897c4c55b9baa7317d0da436",
+      "bytes": 3659
+    },
+    {
+      "path": "notes/why-i-built-it.html",
+      "sha256": "8cc994146c93ed00d01b351d7a4b6d1893e9dbba8f9adc59067b269727f482ba",
+      "bytes": 4610
+    },
+    {
+      "path": "robots.txt",
+      "sha256": "23d50512e57463e1532ff306ddf0b7192ade15425e28162576f226a00f631503",
+      "bytes": 81
+    },
+    {
+      "path": "sitemap.xml",
+      "sha256": "e7c423a3e2a4bf1d5c3e2d0b3848f7d013ab0b60f6f59a3a73f64418e6739a1c",
+      "bytes": 451
+    },
+    {
+      "path": "templates/LICENSE",
+      "sha256": "97957448b7d9ea2f12561d1d753f974b1519c4e870e5272ed19001ab190f1f9f",
+      "bytes": 1070
+    },
+    {
+      "path": "templates/note-template.html",
+      "sha256": "e6c8bd7a96a1ec5786bca190b39fa1ee9f53aa3df439a4a0637488f90c5345e9",
+      "bytes": 2136
+    }
+  ]
+}
