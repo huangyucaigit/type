@@ -33,48 +33,48 @@
     },
     {
       "path": "assets/images/expression-review/01.png",
-      "sha256": "698ff9e353fe463afa8dc30e92d2a93f1cc174b158454ef6b74352d8ae87c2f8",
-      "bytes": 1468135
+      "sha256": "669bd262fc9220c213eeb6cbbdbb446a32c7e86b0a6161139ff23316538d6ee9",
+      "bytes": 87199
     },
     {
       "path": "assets/images/expression-review/02.png",
-      "sha256": "25c7f6d1bd657c9cb07f38f31c25c6e1dbaed24e897854d639086498fcb22fd8",
-      "bytes": 1310229
+      "sha256": "5624b4e183962535562a955a1d1b5055117c52d51931c916f1554522126a9396",
+      "bytes": 82841
     },
     {
       "path": "assets/images/expression-review/03.png",
-      "sha256": "c70fbedba0dd43f016bbb5eaf646209e2fbb2baf13140c9d371dab36c1e4b305",
-      "bytes": 1328625
+      "sha256": "35f8d3728578e76dd996d6c308eba287249642db674e065509a3972a296c6891",
+      "bytes": 108932
     },
     {
       "path": "assets/images/hide-and-recall/01.png",
-      "sha256": "6f6d87d229acb52ed348e5c77ed9cb5317dff8541f7bc338918fe7234f4ae0be",
-      "bytes": 1544408
+      "sha256": "cef604694c52620387bc54136e56a6c4bb42b05549e6cc866c46dac2c8160dcb",
+      "bytes": 103085
     },
     {
       "path": "assets/images/hide-and-recall/02.png",
-      "sha256": "37cedb0c5f4ef623ab27747990f50548283a9d2d15850f4d87779cffe5659ffe",
-      "bytes": 1534221
+      "sha256": "998ec645c1bcba7143bf8d36f980b50ac340e66c5c96da4de81ffb4f2c6325c4",
+      "bytes": 116363
     },
     {
       "path": "assets/images/hide-and-recall/03.png",
-      "sha256": "2318c2fa0b9d5e05f85053f3795686493cb54d8d0ede8a0c2a2f991d9d95f979",
-      "bytes": 1572590
+      "sha256": "fba1d20e69459113ae4bb54edc5be2ad8f511fe6c3111384d0cb89a4a3525257",
+      "bytes": 122881
     },
     {
       "path": "assets/images/highlight-expressions/01.png",
-      "sha256": "ed779080ae8b0d39f980e5080696e51719d8a3156dad780d442dc7fffba40b8b",
-      "bytes": 1313001
+      "sha256": "20de01a34316dad2f5cdae7701f4085ff4a6cd9ce46c17799c991100d228d3e7",
+      "bytes": 119159
     },
     {
       "path": "assets/images/highlight-expressions/02.png",
-      "sha256": "5c7cacf1b85dd5433b7accbebd2ee418686cff8e947add7b11940b078c271f74",
-      "bytes": 1375151
+      "sha256": "eeec4e948a3a2b8416f6bf6e38021d192ba561f3738ff4cb67355270af94b424",
+      "bytes": 125143
     },
     {
       "path": "assets/images/why-i-built-it/01.png",
-      "sha256": "3c20225da5b59d6b33cc14769e8749ec122085a63c66f7479cce0f479e693b09",
-      "bytes": 1851245
+      "sha256": "1b64cb0ce0a6fdd51c2858d62e1f098c46ce375beaec3d9837cc4032969ca0fa",
+      "bytes": 244335
     },
     {
       "path": "assets/images/why-i-built-it/02.jpg",
@@ -83,18 +83,18 @@
     },
     {
       "path": "assets/images/why-i-built-it/03.png",
-      "sha256": "063df9a560490bf59566fbbbeb79556933c1656f33f62c66b3a1ef2558127a10",
-      "bytes": 299586
+      "sha256": "96fdaa1c114f243761fdae19e1156ac790628100770f99cc07d9a0b2db90ef70",
+      "bytes": 72704
     },
     {
       "path": "assets/images/why-i-built-it/04.png",
-      "sha256": "180baa605848907abdb1fbdd9e4bb22dbd9dc540b56d838ec2c6293066294b5b",
-      "bytes": 190462
+      "sha256": "880bfc76712262f9ae4d39dcb39a52f1b8d7c6252f3c58a0ae01cf07370b8c83",
+      "bytes": 137716
     },
     {
       "path": "assets/images/why-i-built-it/05.png",
-      "sha256": "e0c5565272a13a95aebe4b8e38b33d737f1b3f55f2e824372af9040f4b8b27f7",
-      "bytes": 264597
+      "sha256": "a9fe3cdda293be82133d4f620c0e59b92fc42d1dafaa48599cef8a5488962502",
+      "bytes": 199667
     },
     {
       "path": "assets/showcase.css",
@@ -103,28 +103,28 @@
     },
     {
       "path": "index.html",
-      "sha256": "3193570c52cbc3be6b6bbb991bd81f72f8ad19654fe48c592e9864bc7b341363",
-      "bytes": 5121
+      "sha256": "6a1b76cccf42cbc20a3e9d441273392b96f5cc37ae7a95902889009f44a078d1",
+      "bytes": 5189
     },
     {
       "path": "notes/expression-review.html",
-      "sha256": "dda78ec81ea36e23ae199a59af2321ed11363f3026bf369979497582b7f0df38",
-      "bytes": 6584
+      "sha256": "c0ddc145fa15580ac3e3676cf298fd3043e904844c29b5a6ad8b080a57dfed23",
+      "bytes": 6616
     },
     {
       "path": "notes/hide-and-recall.html",
-      "sha256": "564f607e66e32f3e50e4bcc2f22121e909e88bd62d5ca8fad6f1924a92d47fc7",
-      "bytes": 6008
+      "sha256": "30a084371d258461b1e2d173ae44b012f985b435b85fbfb7a98b446e4f9c5702",
+      "bytes": 6040
     },
     {
       "path": "notes/highlight-expressions.html",
-      "sha256": "5a52ed344e8cbf22ffde48adce9f9e73660ad1a9ce51bb67c4e90f942bf44f8c",
-      "bytes": 5660
+      "sha256": "e775253920bef93cea7f1c13cf32b87a8339202bf80d968f07848f9aab824a4b",
+      "bytes": 5692
     },
     {
       "path": "notes/why-i-built-it.html",
-      "sha256": "8378a3e4cecb0c194f7450cd7dd69772c747043bf4d98cacb2dc09735304482d",
-      "bytes": 6916
+      "sha256": "ecaf09ae12252c4bdb2e3c4ccfa5cd8f671021cb111ac0685b3cbb4fc43cabbc",
+      "bytes": 6948
     },
     {
       "path": "robots.txt",
@@ -143,8 +143,8 @@
     },
     {
       "path": "templates/note-template.html",
-      "sha256": "e6c8bd7a96a1ec5786bca190b39fa1ee9f53aa3df439a4a0637488f90c5345e9",
-      "bytes": 2136
+      "sha256": "1b006c0baf06c7b86de60cf2b084c4a1241932154d63ccee6e5ab3973578bfb1",
+      "bytes": 2199
     }
   ]
 }
