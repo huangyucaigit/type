@@ -88,23 +88,23 @@
     },
     {
       "path": "index.html",
-      "sha256": "2cade00ea6e7fb578f023a7935c8c0cbc7e41ab7e2178d9f094da3ecfb821e60",
-      "bytes": 4430
+      "sha256": "e2bd7893fe5c6c55c304a4d540d48b392584433a6235d289d57b836c201b7acb",
+      "bytes": 4426
     },
     {
       "path": "notes/hide-and-recall.html",
-      "sha256": "737d74dba19f81da2f2fc0a0a22a390d1556b7d13b28ea3a592eae3781141232",
-      "bytes": 5934
+      "sha256": "fc77b1c272b9a91888ff97284e8ff02908b695c4bf90fe7bc6c6a6de713f1a53",
+      "bytes": 5926
     },
     {
       "path": "notes/highlight-expressions.html",
-      "sha256": "5ecfd37e6ccdad512aec230e5338eeb1675bbb5442ce0fe0e3990284c6cd4cbe",
-      "bytes": 5586
+      "sha256": "d7b9ed5605eac5607fa09346c6b8c80d3a9b8cd7dcbcfe511e3fffb43e55cb99",
+      "bytes": 5578
     },
     {
       "path": "notes/why-i-built-it.html",
-      "sha256": "767f2e741edbb7731282fecd0199ded8f21872a8a3299c61f29a3642c4b7b052",
-      "bytes": 6842
+      "sha256": "a3085731b5e455a3d9640f0150a2db2e352e32539ed69ce7e96a480765febc28",
+      "bytes": 6834
     },
     {
       "path": "robots.txt",
