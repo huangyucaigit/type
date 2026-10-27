@@ -23,13 +23,28 @@
     },
     {
       "path": "README.md",
-      "sha256": "29131ad9b4d098680bc7a8995a7054d3571598949370d0d14cc772567b76adce",
-      "bytes": 2336
+      "sha256": "7c9d8d062a9514f63987d20e2691c7c23b9faa3273e628ca3bb66eb484d30e4c",
+      "bytes": 2518
     },
     {
       "path": "assets/gallery.js",
       "sha256": "0f527658bd6626929cb1dea9a0df68b8e1e6fc164828db6735f9be541663694e",
       "bytes": 577
+    },
+    {
+      "path": "assets/images/expression-review/01.png",
+      "sha256": "698ff9e353fe463afa8dc30e92d2a93f1cc174b158454ef6b74352d8ae87c2f8",
+      "bytes": 1468135
+    },
+    {
+      "path": "assets/images/expression-review/02.png",
+      "sha256": "25c7f6d1bd657c9cb07f38f31c25c6e1dbaed24e897854d639086498fcb22fd8",
+      "bytes": 1310229
+    },
+    {
+      "path": "assets/images/expression-review/03.png",
+      "sha256": "c70fbedba0dd43f016bbb5eaf646209e2fbb2baf13140c9d371dab36c1e4b305",
+      "bytes": 1328625
     },
     {
       "path": "assets/images/hide-and-recall/01.png",
@@ -88,23 +103,28 @@
     },
     {
       "path": "index.html",
-      "sha256": "e2bd7893fe5c6c55c304a4d540d48b392584433a6235d289d57b836c201b7acb",
-      "bytes": 4426
+      "sha256": "3193570c52cbc3be6b6bbb991bd81f72f8ad19654fe48c592e9864bc7b341363",
+      "bytes": 5121
+    },
+    {
+      "path": "notes/expression-review.html",
+      "sha256": "dda78ec81ea36e23ae199a59af2321ed11363f3026bf369979497582b7f0df38",
+      "bytes": 6584
     },
     {
       "path": "notes/hide-and-recall.html",
-      "sha256": "fc77b1c272b9a91888ff97284e8ff02908b695c4bf90fe7bc6c6a6de713f1a53",
-      "bytes": 5926
+      "sha256": "564f607e66e32f3e50e4bcc2f22121e909e88bd62d5ca8fad6f1924a92d47fc7",
+      "bytes": 6008
     },
     {
       "path": "notes/highlight-expressions.html",
-      "sha256": "d7b9ed5605eac5607fa09346c6b8c80d3a9b8cd7dcbcfe511e3fffb43e55cb99",
-      "bytes": 5578
+      "sha256": "5a52ed344e8cbf22ffde48adce9f9e73660ad1a9ce51bb67c4e90f942bf44f8c",
+      "bytes": 5660
     },
     {
       "path": "notes/why-i-built-it.html",
-      "sha256": "a3085731b5e455a3d9640f0150a2db2e352e32539ed69ce7e96a480765febc28",
-      "bytes": 6834
+      "sha256": "8378a3e4cecb0c194f7450cd7dd69772c747043bf4d98cacb2dc09735304482d",
+      "bytes": 6916
     },
     {
       "path": "robots.txt",
@@ -113,8 +133,8 @@
     },
     {
       "path": "sitemap.xml",
-      "sha256": "e7c423a3e2a4bf1d5c3e2d0b3848f7d013ab0b60f6f59a3a73f64418e6739a1c",
-      "bytes": 451
+      "sha256": "a1df05eeb3c1d13250522cf34de045f0ff9667e961305a737ce7334cda6cb3c2",
+      "bytes": 541
     },
     {
       "path": "templates/LICENSE",
