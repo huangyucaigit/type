@@ -23,8 +23,8 @@
     },
     {
       "path": "README.md",
-      "sha256": "7c9d8d062a9514f63987d20e2691c7c23b9faa3273e628ca3bb66eb484d30e4c",
-      "bytes": 2518
+      "sha256": "833c615dfc00e3f728fab6420a7311841d4541f48466e3ffe3caefeef20efba7",
+      "bytes": 2683
     },
     {
       "path": "assets/gallery.js",
@@ -72,6 +72,21 @@
       "bytes": 125143
     },
     {
+      "path": "assets/images/sentence-roam-name/01.png",
+      "sha256": "26e5e89d18924be8dcbbc68ce199a49f2c595ad332faf3a44f92938e43ec5cfc",
+      "bytes": 92243
+    },
+    {
+      "path": "assets/images/sentence-roam-name/02.png",
+      "sha256": "8dd09c8ae8f52188f969204641352a0dd0c6acafd79c0d6fffdb5edf5b420c03",
+      "bytes": 88524
+    },
+    {
+      "path": "assets/images/sentence-roam-name/03.png",
+      "sha256": "8a0d146d57566db7489f9295eb2898590d167ef46f1d9ccb89bb1c299d8b9ddd",
+      "bytes": 301126
+    },
+    {
       "path": "assets/images/why-i-built-it/01.png",
       "sha256": "1b64cb0ce0a6fdd51c2858d62e1f098c46ce375beaec3d9837cc4032969ca0fa",
       "bytes": 244335
@@ -103,28 +118,33 @@
     },
     {
       "path": "index.html",
-      "sha256": "6a1b76cccf42cbc20a3e9d441273392b96f5cc37ae7a95902889009f44a078d1",
-      "bytes": 5189
+      "sha256": "7739dea38bd02ed1c4dc338512d9db12968bd963084e2966a848f4c4d2c25a56",
+      "bytes": 5728
     },
     {
       "path": "notes/expression-review.html",
-      "sha256": "c0ddc145fa15580ac3e3676cf298fd3043e904844c29b5a6ad8b080a57dfed23",
-      "bytes": 6616
+      "sha256": "8720b1513648d160faf3811f5ec49346ccc5dd04c31f2b268f6c9a1324ceeba4",
+      "bytes": 6715
     },
     {
       "path": "notes/hide-and-recall.html",
-      "sha256": "30a084371d258461b1e2d173ae44b012f985b435b85fbfb7a98b446e4f9c5702",
-      "bytes": 6040
+      "sha256": "6d0091927146094fd3ac40bcefc9c70605b6698e04124d4fdf2bc478d6406c3c",
+      "bytes": 6139
     },
     {
       "path": "notes/highlight-expressions.html",
-      "sha256": "e775253920bef93cea7f1c13cf32b87a8339202bf80d968f07848f9aab824a4b",
-      "bytes": 5692
+      "sha256": "4c97be1ffd3c8a999d91cfebdc14be2d4b33ffe8a552f4fc3c852fca625bda1b",
+      "bytes": 5791
+    },
+    {
+      "path": "notes/sentence-roam-name.html",
+      "sha256": "d5a3ee5e2797d1d859952de0995b0cd3c6593f87dcd6a56c9ec0607cdea10040",
+      "bytes": 6061
     },
     {
       "path": "notes/why-i-built-it.html",
-      "sha256": "ecaf09ae12252c4bdb2e3c4ccfa5cd8f671021cb111ac0685b3cbb4fc43cabbc",
-      "bytes": 6948
+      "sha256": "ec002624af61268f34f04272580c536ac52e244fd82e446712d492a2117f0aa0",
+      "bytes": 7047
     },
     {
       "path": "robots.txt",
@@ -133,8 +153,8 @@
     },
     {
       "path": "sitemap.xml",
-      "sha256": "a1df05eeb3c1d13250522cf34de045f0ff9667e961305a737ce7334cda6cb3c2",
-      "bytes": 541
+      "sha256": "561100679f9ae6c0117515c1b7767922357538f37c2106bf786452b3eb6a196c",
+      "bytes": 632
     },
     {
       "path": "templates/LICENSE",
